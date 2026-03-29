@@ -5,15 +5,14 @@ puppeteer.use(StealthPlugin());
 async function getBrowser() {
     return await puppeteer.launch({
         args: [
-            '--no-sandbox', 
-            '--disable-setuid-sandbox', 
-            '--disable-dev-shm-usage', 
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage',
             '--single-process',
             '--no-zygote'
         ],
-        // executablePath එක hardcode කරන්නේ නැතුව environment variable එකෙන් ගන්නවා
-        // ඒක නැත්නම් default එක ගන්නවා (Buildpack එක මේක auto set කරනවා)
-        executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined, 
+        // Heroku Buildpack එක Chrome දාන නිවැරදි පාර මෙන්න මේකයි
+        executablePath: '/app/.apt/usr/bin/google-chrome', 
         headless: "new"
     });
 }
