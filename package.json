@@ -1,4 +1,10 @@
 {
+  "name": "anime-heaven-api",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
   "dependencies": {
     "express": "^5.2.1",
     "puppeteer": "^24.40.0",
