@@ -32,15 +32,33 @@ async function getGameFiles(gameUrl) {
     try {
         const { data } = await axios.get(gameUrl);
         const $ = cheerio.load(data);
+        
         let links = [];
+        
+        // 1. ගේම් එකේ කවර් ඉමේජ් එක ගන්නවා
+        // පේජ් එකේ entry-content ඇතුළේ තියෙන පළවෙනි image එකේ src එක ගන්නවා
+        const imageUrl = $('.entry-content img').first().attr('src') || "";
+
+        // 2. ඩවුන්ලෝඩ් ලින්ක්ස් ටික කලින් වගේම ගන්නවා
         $('a').each((_, el) => {
             const href = $(el).attr('href');
             if (href && href.includes('datanodes.to')) {
-                links.push({ name: $(el).text().trim() || "Download Part", url: href });
+                links.push({ 
+                    name: $(el).text().trim() || "Download Part", 
+                    url: href 
+                });
             }
         });
-        return { success: true, files: links };
-    } catch (e) { return { success: false, error: e.message }; }
+
+        return { 
+            success: true, 
+            image: imageUrl, // මෙතනින් image url එක එනවා
+            files: links 
+        };
+
+    } catch (e) { 
+        return { success: false, error: e.message }; 
+    }
 }
 
 // --- 3. Final Direct Link (Puppeteer for Heroku) ---
