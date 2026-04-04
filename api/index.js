@@ -35,11 +35,24 @@ async function getGameFiles(gameUrl) {
         
         let links = [];
         
-        // 1. ගේම් එකේ කවර් ඉමේජ් එක ගන්නවා
-        // පේජ් එකේ entry-content ඇතුළේ තියෙන පළවෙනි image එකේ src එක ගන්නවා
-        const imageUrl = $('.entry-content img').first().attr('src') || "";
+        // 1. මුලින්ම පේජ් එකේ තියෙන ImageBan ලින්ක් එක හොයනවා
+        let pageImageUrl = $('.entry-content img').first().attr('src') || "";
+        let finalImageUrl = pageImageUrl;
 
-        // 2. ඩවුන්ලෝඩ් ලින්ක්ස් ටික කලින් වගේම ගන්නවා
+        // 2. ඒ ලින්ක් එක imageban.ru වගේ එකක් නම්, ඒක ඇතුළට ගිහින් ඇත්තම image එක හොයමු
+        if (pageImageUrl.includes('imageban.ru')) {
+            try {
+                const imgPage = await axios.get(pageImageUrl);
+                const $img = cheerio.load(imgPage.data);
+                // ImageBan එකේ ඇත්තම පින්තූරය තියෙන්නේ 'id="img_obj"' කියන එකේ හෝ 'img' tag එකක
+                const directImg = $img('#img_obj').attr('src') || $img('img[src*="/out/"]').attr('src');
+                if (directImg) finalImageUrl = directImg;
+            } catch (err) {
+                console.log("Image scraping failed, using page link.");
+            }
+        }
+
+        // 3. Download ලින්ක්ස් ටික අරගන්නවා
         $('a').each((_, el) => {
             const href = $(el).attr('href');
             if (href && href.includes('datanodes.to')) {
@@ -52,7 +65,7 @@ async function getGameFiles(gameUrl) {
 
         return { 
             success: true, 
-            image: imageUrl, // මෙතනින් image url එක එනවා
+            image: finalImageUrl, 
             files: links 
         };
 
