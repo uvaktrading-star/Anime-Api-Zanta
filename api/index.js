@@ -64,12 +64,13 @@ async function getDirectDownload(dataNodesUrl) {
         await page.setDefaultNavigationTimeout(60000);
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36');
 
-        // 1. Ads සහ Popups එන එක වළක්වන්න අලුත් ටැබ් එකක් හැදුණොත් ඒක වහන්න
+        // 1. Ads/New Tabs වළක්වන ලොජික් එක
         browser.on('targetcreated', async (target) => {
             if (target.type() === 'page') {
                 const newPage = await target.page();
                 if (newPage) {
                     const url = newPage.url();
+                    // මේන් සයිට් එක නෙවෙයි නම් වහලා දානවා
                     if (!url.includes('datanodes.to') && url !== 'about:blank') {
                         console.log("Closing Ad Tab:", url);
                         await newPage.close();
@@ -81,38 +82,63 @@ async function getDirectDownload(dataNodesUrl) {
         console.log("Navigating to DataNodes...");
         await page.goto(dataNodesUrl, { waitUntil: 'networkidle2' });
 
-        // 2. Button එක හරියටම අල්ලගන්න Selector එක (ඔයාගේ Screenshot එකේ තිබුණ විදිහට)
         const btnSelector = 'button.bg-blue-600';
         await page.waitForSelector(btnSelector, { timeout: 15000 });
 
-        console.log("Clicking Start Download...");
-        // JavaScript එකෙන් click කරවමු Popup ads වළක්වන්න
+        // --- පියවර 1: පළවෙනි ක්ලික් එක (ඇඩ් එක එන එක) ---
+        console.log("First Click (Handling potential ad)...");
+        await page.evaluate((sel) => {
+            document.querySelector(sel).click();
+        }, btnSelector);
+
+        // පොඩි වෙලාවක් ඉමු ඇඩ් එක ඕපන් වෙලා ක්ලෝස් වෙනකම්
+        await new Promise(r => setTimeout(r, 2000));
+
+        // --- පියවර 2: දෙවැනි ක්ලික් එක (Countdown එක පටන් ගන්න) ---
+        console.log("Second Click (Starting countdown)...");
+        try {
+            await page.evaluate((sel) => {
+                document.querySelector(sel).click();
+            }, btnSelector);
+        } catch (e) {
+            console.log("Second click attempted...");
+        }
+
+        // --- පියවර 3: තත්පර 5ක Countdown එක ඉවර වෙනකම් ඉමු ---
+        console.log("Waiting for short countdown (7s)...");
+        await new Promise(r => setTimeout(r, 7000));
+
+        // --- පියවර 4: තෙවැනි ක්ලික් එක (Download ලින්ක් එක Generate කරන්න) ---
+        console.log("Third Click (Requesting final link)...");
         await page.evaluate((sel) => {
             const btn = document.querySelector(sel);
             if (btn) btn.click();
         }, btnSelector);
 
-        // 3. Countdown එක ඉවර වෙනකම් ඉමු (තත්පර 19ක්)
-        console.log("Waiting for countdown (19s)...");
-        await new Promise(r => setTimeout(r, 19000));
+        // අවසාන ලින්ක් එක ලෝඩ් වෙන්න ටිකක් ඉමු
+        console.log("Waiting for final link (12s)...");
+        await new Promise(r => setTimeout(r, 12000));
 
-        // 4. Final Link එක අරගන්න ලොජික් එක
+        // --- පියවර 5: Final Link එක අරගන්න ලොජික් එක ---
         const directUrl = await page.evaluate(() => {
-            // ක්‍රමය 1: dlproxy ලින්ක් එක තිබේදැයි බැලීම
             const links = Array.from(document.querySelectorAll('a'));
-            const dlproxy = links.find(a => a.href.includes('dlproxy.uk') || a.href.includes('/download/file/'));
+            
+            // 1. dlproxy ලින්ක් එක තිබේදැයි බැලීම
+            const dlproxy = links.find(a => a.href.includes('dlproxy.uk'));
             if (dlproxy) return dlproxy.href;
 
-            // ක්‍රමය 2: Countdown එකෙන් පස්සේ එන "Download Now" බටන් එක
-            // සාමාන්‍යයෙන් මේක එන්නේ කොළ පාටට (bg-green-600 වගේ)
-            const greenBtn = document.querySelector('a.bg-green-600') || document.querySelector('a[href*="dlproxy"]');
-            if (greenBtn) return greenBtn.href;
+            // 2. "Download Now" බටන් එක සොයමු
+            const downloadBtn = links.find(a => 
+                a.innerText.toLowerCase().includes('download now') || 
+                a.classList.contains('bg-green-600')
+            );
+            if (downloadBtn) return downloadBtn.href;
 
             return null;
         });
 
         if (!directUrl || directUrl.includes('datanodes.to/download')) {
-            throw new Error("Direct link not found after countdown. Site might be blocking or layout changed.");
+            throw new Error("Direct link not found after multiple steps.");
         }
 
         console.log("Success! Link found.");
@@ -125,7 +151,6 @@ async function getDirectDownload(dataNodesUrl) {
         if (browser) await browser.close();
     }
 }
-
 // Routes
 app.get('/api/search', async (req, res) => res.json(await searchGames(req.query.q)));
 app.get('/api/files', async (req, res) => res.json(await getGameFiles(req.query.url)));
