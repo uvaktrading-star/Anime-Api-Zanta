@@ -47,7 +47,7 @@ async function getGameFiles(gameUrl) {
 async function getDirectDownload(dataNodesUrl) {
     let browser;
     try {
-        console.log("Launching Puppeteer...");
+        console.log("Launching Puppeteer Stealth Mode...");
         browser = await puppeteer.launch({
             executablePath: '/app/.chrome-for-testing/chrome-linux64/chrome',
             headless: true,
@@ -55,94 +55,68 @@ async function getDirectDownload(dataNodesUrl) {
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
                 '--disable-dev-shm-usage',
-                '--disable-gpu',
-                '--gpu-sandbox-allow-sys-calls'
+                '--disable-gpu'
             ]
         });
 
         const page = await browser.newPage();
-        await page.setDefaultNavigationTimeout(60000);
-        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36');
+        await page.setDefaultNavigationTimeout(90000); // කාලය තවත් වැඩි කරා
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36');
 
-        // 1. Ads/New Tabs වළක්වන ලොජික් එක
-        browser.on('targetcreated', async (target) => {
-            if (target.type() === 'page') {
-                const newPage = await target.page();
-                if (newPage) {
-                    const url = newPage.url();
-                    // මේන් සයිට් එක නෙවෙයි නම් වහලා දානවා
-                    if (!url.includes('datanodes.to') && url !== 'about:blank') {
-                        console.log("Closing Ad Tab:", url);
-                        await newPage.close();
-                    }
-                }
+        // Request Interception: ඇඩ් ලෝඩ් වෙන එක නවත්තනවා (Speed එක වැඩි වෙන්න)
+        await page.setRequestInterception(true);
+        page.on('request', (request) => {
+            const url = request.url();
+            if (url.includes('google-analytics') || url.includes('doubleclick') || url.includes('adsystem')) {
+                request.abort();
+            } else {
+                request.continue();
             }
         });
 
         console.log("Navigating to DataNodes...");
-        await page.goto(dataNodesUrl, { waitUntil: 'networkidle2' });
+        await page.goto(dataNodesUrl, { waitUntil: 'domcontentloaded' });
 
-        const btnSelector = 'button.bg-blue-600';
-        await page.waitForSelector(btnSelector, { timeout: 15000 });
-
-        // --- පියවර 1: පළවෙනි ක්ලික් එක (ඇඩ් එක එන එක) ---
-        console.log("First Click (Handling potential ad)...");
-        await page.evaluate((sel) => {
-            document.querySelector(sel).click();
-        }, btnSelector);
-
-        // පොඩි වෙලාවක් ඉමු ඇඩ් එක ඕපන් වෙලා ක්ලෝස් වෙනකම්
-        await new Promise(r => setTimeout(r, 2000));
-
-        // --- පියවර 2: දෙවැනි ක්ලික් එක (Countdown එක පටන් ගන්න) ---
-        console.log("Second Click (Starting countdown)...");
-        try {
-            await page.evaluate((sel) => {
-                document.querySelector(sel).click();
-            }, btnSelector);
-        } catch (e) {
-            console.log("Second click attempted...");
+        // 1. "Start Download" බටන් එක ක්ලික් කිරීම (3 වතාවක් ට්‍රයි කරනවා)
+        for (let i = 1; i <= 3; i++) {
+            console.log(`Click attempt ${i}...`);
+            await page.evaluate(() => {
+                const buttons = Array.from(document.querySelectorAll('button, a'));
+                const target = buttons.find(b => 
+                    b.innerText.toLowerCase().includes('download') || 
+                    b.innerText.toLowerCase().includes('start')
+                );
+                if (target) target.click();
+            });
+            await new Promise(r => setTimeout(r, 3000)); // ඇඩ්ස් වහන්න ඉඩ දෙනවා
         }
 
-        // --- පියවර 3: තත්පර 5ක Countdown එක ඉවර වෙනකම් ඉමු ---
-        console.log("Waiting for short countdown (7s)...");
-        await new Promise(r => setTimeout(r, 7000));
+        // 2. Countdown එක ඉවර වෙනකම් ලොකු වෙලාවක් ඉමු
+        console.log("Waiting for generation (25s)...");
+        await new Promise(r => setTimeout(r, 25000));
 
-        // --- පියවර 4: තෙවැනි ක්ලික් එක (Download ලින්ක් එක Generate කරන්න) ---
-        console.log("Third Click (Requesting final link)...");
-        await page.evaluate((sel) => {
-            const btn = document.querySelector(sel);
-            if (btn) btn.click();
-        }, btnSelector);
-
-        // අවසාන ලින්ක් එක ලෝඩ් වෙන්න ටිකක් ඉමු
-        console.log("Waiting for final link (12s)...");
-        await new Promise(r => setTimeout(r, 12000));
-
-        // --- පියවර 5: Final Link එක අරගන්න ලොජික් එක ---
-        const directUrl = await page.evaluate(() => {
-            const links = Array.from(document.querySelectorAll('a'));
+        // 3. ලින්ක් එක හොයනවා (Deep Search)
+        const result = await page.evaluate(() => {
+            const allLinks = Array.from(document.querySelectorAll('a'));
             
-            // 1. dlproxy ලින්ක් එක තිබේදැයි බැලීම
-            const dlproxy = links.find(a => a.href.includes('dlproxy.uk'));
-            if (dlproxy) return dlproxy.href;
+            // dlproxy ලින්ක් එක තියෙනවද බලනවා
+            const direct = allLinks.find(a => a.href.includes('dlproxy.uk'));
+            if (direct) return { found: true, url: direct.href };
 
-            // 2. "Download Now" බටන් එක සොයමු
-            const downloadBtn = links.find(a => 
-                a.innerText.toLowerCase().includes('download now') || 
-                a.classList.contains('bg-green-600')
-            );
-            if (downloadBtn) return downloadBtn.href;
-
-            return null;
+            // නැත්නම් පේජ් එකේ තියෙන හැම ලින්ක් එකක්ම ලැයිස්තුගත කරනවා (Debug වලට)
+            return { 
+                found: false, 
+                links: allLinks.slice(0, 10).map(a => a.href) 
+            };
         });
 
-        if (!directUrl || directUrl.includes('datanodes.to/download')) {
-            throw new Error("Direct link not found after multiple steps.");
+        if (result.found) {
+            console.log("Success! Link found.");
+            return { success: true, url: result.url };
+        } else {
+            console.log("Recent Links on page:", result.links);
+            throw new Error("Direct link still not visible. Check logs for links.");
         }
-
-        console.log("Success! Link found.");
-        return { success: true, url: directUrl };
 
     } catch (e) {
         console.error("Puppeteer Error:", e.message);
