@@ -47,18 +47,21 @@ async function getGameFiles(gameUrl) {
 async function getDirectDownload(dataNodesUrl) {
     let browser;
     try {
+        console.log("Launching Puppeteer...");
         browser = await puppeteer.launch({
+            // 💡 අන්න ඒ අඩුව මෙන්න. මේ path එක අනිවාර්යයෙන්ම තියෙන්න ඕනේ.
+            executablePath: '/app/.chrome-for-testing/chrome-linux64/chrome',
             headless: true,
             args: [
                 '--no-sandbox', 
                 '--disable-setuid-sandbox',
-                '--disable-dev-shm-usage', // Heroku වල memory limits වලට හොඳයි
+                '--disable-dev-shm-usage',
+                '--disable-gpu',
                 '--gpu-sandbox-allow-sys-calls'
             ]
         });
+
         const page = await browser.newPage();
-        
-        // Timeout එක වැඩි කරන්න
         await page.setDefaultNavigationTimeout(60000); 
 
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36');
@@ -67,7 +70,6 @@ async function getDirectDownload(dataNodesUrl) {
         await page.goto(dataNodesUrl, { waitUntil: 'networkidle2' });
         
         const btn = 'button.bg-blue-600';
-        // Button එක එනකම් තත්පර 15ක් බලන් ඉමු
         await page.waitForSelector(btn, { timeout: 15000 });
         await page.click(btn);
         
@@ -80,11 +82,7 @@ async function getDirectDownload(dataNodesUrl) {
             return a ? a.href : null;
         });
 
-        if (!directUrl) {
-            // Error එකක් ආවොත් ලොග් එකේ බලාගන්න screenshot එකක් ගමු (Debugging වලට ලේසියි)
-            console.log("Link not found on page.");
-            return { success: false, error: "Direct link not found after countdown." };
-        }
+        if (!directUrl) throw new Error("Direct link not found after countdown.");
 
         return { success: true, url: directUrl };
 
