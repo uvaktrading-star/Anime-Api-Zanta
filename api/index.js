@@ -47,17 +47,17 @@ async function getGameFiles(gameUrl) {
 async function getDirectDownload(dataNodesUrl) {
     let browser;
     try {
-        console.log("Launching Puppeteer Faster Mode...");
+        console.log("Launching Final Boss Mode...");
         browser = await puppeteer.launch({
             executablePath: '/app/.chrome-for-testing/chrome-linux64/chrome',
             headless: true,
-            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+            args: ['--no-sandbox', '--disable-setuid-sandbox']
         });
 
         const page = await browser.newPage();
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36');
 
-        // ඇඩ් ටැබ් ආවොත් එවලෙම වහන්න (මේක අනිවාර්යයි)
+        // ඇඩ් ටැබ් ආවොත් වහන්න
         browser.on('targetcreated', async (target) => {
             if (target.type() === 'page') {
                 const adPage = await target.page();
@@ -67,45 +67,53 @@ async function getDirectDownload(dataNodesUrl) {
             }
         });
 
-        console.log("Navigating...");
+        console.log("Step 1: Navigating to page...");
         await page.goto(dataNodesUrl, { waitUntil: 'domcontentloaded' });
 
+        // --- පියවර 1: "Free Download" බටන් එක ක්ලික් කිරීම ---
+        console.log("Step 2: Clicking Free Download...");
         const btnSelector = 'button.bg-blue-600';
         await page.waitForSelector(btnSelector, { timeout: 10000 });
+        
+        // පේජ් එක refresh වෙනකම් බලන් ඉන්න ගමන් click කරනවා
+        await Promise.all([
+            page.click(btnSelector),
+            page.waitForNavigation({ waitUntil: 'domcontentloaded' }).catch(() => console.log("Navigation timeout or not needed"))
+        ]);
 
-        console.log("Starting Click Loop until link appears...");
-        let directUrl = null;
-        let attempts = 0;
-        const maxAttempts = 12; // තත්පර 24ක් උපරිම (Heroku limit එකට යටින්)
+        // --- පියවර 2: Countdown එක එනකම් ඉඳලා ආයෙත් ක්ලික් කිරීම ---
+        console.log("Step 3: Waiting for countdown/next button...");
+        await new Promise(r => setTimeout(r, 10000)); // තත්පර 10ක් ඉමු
 
-        while (!directUrl && attempts < maxAttempts) {
-            attempts++;
-            
-            // 1. බටන් එක ක්ලික් කරනවා
-            await page.evaluate((sel) => {
-                const btn = document.querySelector(sel);
-                if (btn) btn.click();
-            }, btnSelector).catch(() => {});
+        // දැන් පේජ් එකේ තියෙන බටන් එක ආයෙත් ක්ලික් කරමු
+        await page.evaluate((sel) => {
+            const btn = document.querySelector(sel);
+            if (btn) btn.click();
+        }, btnSelector).catch(() => {});
 
-            // 2. තත්පර 2ක් ඉන්නවා ලින්ක් එක ආවද බලන්න
-            await new Promise(r => setTimeout(r, 2000));
+        // --- පියවර 3: අවසාන ලින්ක් එක එනකම් තත්පර 10ක් බලන් ඉමු ---
+        console.log("Step 4: Waiting for final direct link...");
+        await new Promise(r => setTimeout(r, 10000));
 
-            // 3. පේජ් එකේ dlproxy ලින්ක් එක තියෙනවද කියලා චෙක් කරනවා
-            directUrl = await page.evaluate(() => {
-                const anchor = Array.from(document.querySelectorAll('a'))
-                                    .find(a => a.href.includes('dlproxy.uk'));
-                return anchor ? anchor.href : null;
-            });
-
-            if (directUrl) break;
-            console.log(`Attempt ${attempts}: Link not found yet, clicking again...`);
-        }
+        // --- පියවර 4: ලින්ක් එක අරගැනීම ---
+        const directUrl = await page.evaluate(() => {
+            const links = Array.from(document.querySelectorAll('a'));
+            const target = links.find(a => a.href.includes('dlproxy.uk'));
+            return target ? target.href : null;
+        });
 
         if (directUrl) {
             console.log("Success! Link found.");
             return { success: true, url: directUrl };
         } else {
-            throw new Error("Direct link not found within time limit.");
+            // ලින්ක් එක නැත්නම්, දැනට පේජ් එකේ තියෙන එකම කොළ පාට ලින්ක් එක හරි ගමු
+            const backupUrl = await page.evaluate(() => {
+                const greenBtn = document.querySelector('a.bg-green-600');
+                return greenBtn ? greenBtn.href : null;
+            });
+            if (backupUrl) return { success: true, url: backupUrl };
+            
+            throw new Error("Link still hidden. Site protection might be too high.");
         }
 
     } catch (e) {
