@@ -53,7 +53,7 @@ async function getDirectDownload(dataNodesUrl) {
                 '--no-sandbox', 
                 '--disable-setuid-sandbox',
                 '--disable-dev-shm-usage', // Heroku වල memory limits වලට හොඳයි
-                '--disable-gpu'
+                '--gpu-sandbox-allow-sys-calls'
             ]
         });
         const page = await browser.newPage();
