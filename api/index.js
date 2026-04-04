@@ -47,7 +47,7 @@ async function getGameFiles(gameUrl) {
 async function getDirectDownload(dataNodesUrl) {
     let browser;
     try {
-        console.log("Launching Super-Targeted Mode...");
+        console.log("Launching Ultimate Sniper Mode...");
         browser = await puppeteer.launch({
             executablePath: '/app/.chrome-for-testing/chrome-linux64/chrome',
             headless: true,
@@ -57,16 +57,25 @@ async function getDirectDownload(dataNodesUrl) {
         const page = await browser.newPage();
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36');
 
-        // 1. ඇඩ් ටැබ් එකක් ආපු ගමන් ඒක වහලා මුල් පේජ් එකටම එනවා
+        let capturedUrl = null;
+
+        // 🎯 සයිට් එකේ කොහේ හරි dlproxy ලින්ක් එකක් ගියොත් එවලෙම අල්ලගන්නවා
+        page.on('request', request => {
+            const url = request.url();
+            if (url.includes('dlproxy.uk/download/')) {
+                capturedUrl = url;
+            }
+        });
+
+        // 🛡️ ඇඩ්ස් ආපු ගමන් වහලා මුල් පේජ් එකට ෆෝකස් කරනවා
         browser.on('targetcreated', async (target) => {
             if (target.type() === 'page') {
                 const adPage = await target.page();
                 if (adPage) {
                     const url = adPage.url();
                     if (!url.includes('datanodes.to')) {
-                        console.log("Ad Blocked & Closing:", url);
                         await adPage.close().catch(() => {});
-                        await page.bringToFront(); // බලෙන්ම මුල් පේජ් එක ඉස්සරහට ගන්නවා
+                        await page.bringToFront();
                     }
                 }
             }
@@ -78,58 +87,45 @@ async function getDirectDownload(dataNodesUrl) {
         const btnSelector = 'button.bg-blue-600';
         await page.waitForSelector(btnSelector, { timeout: 10000 });
 
-        // 2. මෙන්න මෙතන තමයි සෙල්ලම තියෙන්නේ
-        // අපි බටන් එක ඔබනවා පේජ් එකේ "Countdown" එක පේනකම්ම
-        console.log("Step 2: Clicking until countdown starts...");
-        let countdownStarted = false;
-        let clickLimit = 5; // උපරිම 5 පාරක් ට්‍රයි කරනවා
+        // --- පියවර 1: Countdown එක පටන් ගන්නකම් ඔබනවා ---
+        console.log("Step 2: Clicking to trigger countdown...");
+        for (let i = 0; i < 4; i++) {
+            await page.evaluate((sel) => document.querySelector(sel).click(), btnSelector);
+            await new Promise(r => setTimeout(r, 3000));
+            
+            const isCounting = await page.evaluate(() => {
+                const txt = document.body.innerText.toLowerCase();
+                return txt.includes('wait') || txt.includes('seconds');
+            });
+            if (isCounting) {
+                console.log("Countdown detected!");
+                break;
+            }
+        }
 
-        for (let i = 0; i < clickLimit; i++) {
-            console.log(`Clicking button (Attempt ${i + 1})...`);
+        // --- පියවර 2: Countdown එක ඉවර වෙන්න වෙලාව දෙනවා (5s + safe margin) ---
+        console.log("Step 3: Waiting for 5s countdown to finish...");
+        await new Promise(r => setTimeout(r, 8000));
+
+        // --- පියවර 3: ලින්ක් එක අහුවෙනකම්ම ආයෙත් ඔබනවා (මෙතනයි ඇඩ්ස් වැඩියෙන්ම එන්නේ) ---
+        console.log("Step 4: Clicking for final link capture...");
+        for (let i = 0; i < 6; i++) {
+            if (capturedUrl) break;
+
             await page.evaluate((sel) => {
                 const btn = document.querySelector(sel);
                 if (btn) btn.click();
             }, btnSelector);
 
-            await new Promise(r => setTimeout(r, 3000)); // ඇඩ් එක ඕපන් වෙලා වහන්න වෙලාව දෙනවා
-
-            // පේජ් එකේ Countdown එක හරි "Download Now" හරි පේනවාද බලනවා
-            countdownStarted = await page.evaluate(() => {
-                const bodyText = document.body.innerText.toLowerCase();
-                // තත්පර ගණන පේනවා නම් හෝ Download Now ලින්ක් එක ඇවිත් නම් loop එක නවත්තනවා
-                return bodyText.includes('wait') || bodyText.includes('seconds') || !!document.querySelector('a.bg-green-600');
-            });
-
-            if (countdownStarted) {
-                console.log("Countdown detected! Waiting...");
-                break;
-            }
+            console.log(`Final click attempt ${i+1}...`);
+            await new Promise(r => setTimeout(r, 3500)); // ඇඩ්ස් ක්ලෝස් වෙන්න වෙලාව
         }
 
-        // 3. Countdown එකටයි Final Link එකටයි වෙලාව දෙමු
-        console.log("Step 3: Waiting for final link generation (15s)...");
-        await new Promise(r => setTimeout(r, 15000));
-
-        // 4. අන්තිම පාරටත් බටන් එක ඔබනවා (Countdown ඉවර වුණාම එන එක)
-        await page.evaluate((sel) => {
-            const btn = document.querySelector(sel);
-            if (btn) btn.click();
-        }, btnSelector).catch(() => {});
-
-        await new Promise(r => setTimeout(r, 5000)); // ලින්ක් එක load වෙන්න වෙලාව
-
-        // 5. ලින්ක් එක අරගන්නවා
-        const directUrl = await page.evaluate(() => {
-            const links = Array.from(document.querySelectorAll('a'));
-            const target = links.find(a => a.href.includes('dlproxy.uk'));
-            return target ? target.href : null;
-        });
-
-        if (directUrl) {
-            console.log("Success! Link found.");
-            return { success: true, url: directUrl };
+        if (capturedUrl) {
+            console.log("🎯 Success! Link Captured:", capturedUrl);
+            return { success: true, url: capturedUrl };
         } else {
-            throw new Error("Could not capture the link. Possible bot protection.");
+            throw new Error("Could not capture link. Site protection might be too strong.");
         }
 
     } catch (e) {
