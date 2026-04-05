@@ -261,10 +261,13 @@ async function getEpisodes(animeUrl) {
 async function getDirectAnimeLink(animeUrl, episodeNum) {
     let browser;
     try {
-        console.log(`🚀 Sniping Episode ${episodeNum}...`);
+        console.log(`🚀 Sniping Episode ${episodeNum} with Ultimate Logic...`);
+        
         browser = await puppeteer.launch({
+            // Heroku standard path එක සහ local path එක දෙකම check කරනවා
+            executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/app/.apt/usr/bin/google-chrome',
             headless: true,
-            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--single-process']
         });
 
         const page = await browser.newPage();
@@ -272,71 +275,89 @@ async function getDirectAnimeLink(animeUrl, episodeNum) {
 
         let capturedMp4 = null;
 
-        // 🎯 FitGirl එකේ වගේම request එක යනකොටම .mp4 ලින්ක් එක අල්ලගමු
+        // 🎯 Sniping: ඕනෑම වෙලාවක .mp4 ලින්ක් එකක් බැක්ග්‍රවුන්ඩ් එකේ ගියොත් අල්ලගන්නවා
         await page.setRequestInterception(true);
         page.on('request', (request) => {
             const url = request.url();
-            
-            // වීඩියෝ ෆයිල් එකේ ලින්ක් එක අහුවුණොත් සේව් කරගන්නවා
             if (url.includes('video.mp4') || url.endsWith('.mp4')) {
                 capturedMp4 = url;
+                console.log("🎯 MP4 Captured via Network!");
             }
-
-            // අනවශ්‍ය ඇඩ්ස් බ්ලොක් කරනවා
-            if (url.includes('googleads') || url.includes('popads') || url.includes('doubleclick')) {
-                request.abort();
-            } else {
-                request.continue();
-            }
+            
+            // Ads block කිරීම
+            if (url.includes('googleads') || url.includes('popads')) request.abort();
+            else request.continue();
         });
 
-        // 🛡️ ඇඩ්ස් පේජ් ආවොත් එවලෙම වහනවා (FitGirl logic)
+        // 🛡️ Anti-Popup: අලුත් පේජ් එකක් ඕපන් වුණොත් ඒක ඇනිමේ හෙවන් නෙමෙයි නම් වහනවා
         browser.on('targetcreated', async (target) => {
-            if (target.type() === 'page') {
-                const adPage = await target.page();
-                if (adPage) {
-                    const url = adPage.url();
-                    if (!url.includes('animeheaven.me')) {
-                        await adPage.close().catch(() => {});
-                    }
+            const newPage = await target.page();
+            if (newPage) {
+                const url = newPage.url();
+                if (!url.includes('animeheaven.me')) {
+                    await newPage.close().catch(() => {});
+                    await page.bringToFront();
                 }
             }
         });
 
-        // 1. ඇනිමේ පේජ් එකට යනවා
+        // 1. ඇනිමේ පේජ් එකට යාම
         await page.goto(animeUrl, { waitUntil: 'domcontentloaded' });
 
-        // 2. එපිසෝඩ් එක සිලෙක්ට් කරලා ක්ලික් කරනවා
-        const clicked = await page.evaluate((ep) => {
-            const anchors = Array.from(document.querySelectorAll('.linetitle2 a'));
-            const target = anchors.find(a => a.querySelector('.watch2')?.innerText.trim() === String(ep));
-            if (target) {
-                target.click();
-                return true;
+        // 2. එපිසෝඩ් එක සිලෙක්ට් කරලා ක්ලික් කිරීම (FitGirl logic - repeat click)
+        console.log("Step 1: Clicking Episode Button...");
+        
+        let clicked = false;
+        for (let i = 0; i < 5; i++) {
+            if (capturedMp4) break;
+
+            clicked = await page.evaluate((ep) => {
+                const anchors = Array.from(document.querySelectorAll('.linetitle2 a'));
+                const target = anchors.find(a => a.querySelector('.watch2')?.innerText.trim() === String(ep));
+                if (target) {
+                    target.click();
+                    return true;
+                }
+                return false;
+            }, episodeNum);
+
+            if (clicked) {
+                console.log(`Click attempt ${i+1} successful, waiting for link...`);
+                await new Promise(r => setTimeout(r, 4000)); // ඇඩ්ස් ලෝඩ් වෙලා ලින්ක් එක එනකම් ඉන්නවා
             }
-            return false;
-        }, episodeNum);
+            if (capturedMp4) break;
+        }
 
         if (!clicked) throw new Error("Episode not found!");
 
-        // 3. ලින්ක් එක අහුවෙනකම් පොඩ්ඩක් වෙලාව දෙනවා (Max 10s)
-        let timeout = 0;
-        while (!capturedMp4 && timeout < 10) {
-            await new Promise(r => setTimeout(r, 1000));
-            timeout++;
+        // 3. ලින්ක් එක තාම අහුවුණේ නැත්නම් රතු පාට Download Button එක හොයලා ක්ලික් කරනවා
+        if (!capturedMp4) {
+            console.log("Step 2: Link not found in network, trying Download Button...");
+            const btnSelector = 'a[href*="video.mp4"]';
+            
+            for (let i = 0; i < 4; i++) {
+                if (capturedMp4) break;
+                
+                const btnExists = await page.evaluate((sel) => {
+                    const btn = document.querySelector(sel);
+                    if (btn) {
+                        btn.click();
+                        return true;
+                    }
+                    return false;
+                }, btnSelector);
+
+                if (btnExists) {
+                    console.log(`Download btn click ${i+1}...`);
+                    await new Promise(r => setTimeout(r, 3000));
+                }
+            }
         }
 
         if (capturedMp4) {
             return { success: true, episode: episodeNum, download_url: capturedMp4 };
         } else {
-            // පේජ් එකේ තියෙන බටන් එකෙන් කෙලින්ම බලමු (Fallback)
-            const fallbackLink = await page.evaluate(() => {
-                const btn = document.querySelector('a[href*="video.mp4"]');
-                return btn ? btn.href : null;
-            });
-            
-            if (fallbackLink) return { success: true, episode: episodeNum, download_url: fallbackLink };
-            throw new Error("Could not capture direct link.");
+            throw new Error("Could not capture link. Try again.");
         }
 
     } catch (e) {
