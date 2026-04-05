@@ -13,6 +13,7 @@ const jar = new CookieJar();
 const client = wrapper(axios.create({ jar }));
 const BASE_URL = "https://fitgirl-repacks.site";
 const ANIME_BASE = "https://animeheaven.me";
+const HEROKU_CHROME_PATH = '/app/.chrome-for-testing/chrome-linux64/chrome';
 
 //--------FITGIRL REPACK---------
 // --- 1. Search Games ---
@@ -261,135 +262,59 @@ async function getEpisodes(animeUrl) {
 async function getDirectAnimeLink(animeUrl, episodeNum) {
     let browser;
     try {
-        console.log(`🚀 Sniping Episode ${episodeNum} with Ultimate Logic...`);
-        
+        console.log(`🚀 Sniping Episode ${episodeNum} (Anime)...`);
         browser = await puppeteer.launch({
-            // Heroku standard path එක සහ local path එක දෙකම check කරනවා
-            executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/app/.apt/usr/bin/google-chrome',
+            executablePath: HEROKU_CHROME_PATH,
             headless: true,
-            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--single-process']
+            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
         });
 
         const page = await browser.newPage();
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36');
 
         let capturedMp4 = null;
-
-        // 🎯 Sniping: ඕනෑම වෙලාවක .mp4 ලින්ක් එකක් බැක්ග්‍රවුන්ඩ් එකේ ගියොත් අල්ලගන්නවා
         await page.setRequestInterception(true);
         page.on('request', (request) => {
             const url = request.url();
             if (url.includes('video.mp4') || url.endsWith('.mp4')) {
                 capturedMp4 = url;
-                console.log("🎯 MP4 Captured via Network!");
             }
-            
-            // Ads block කිරීම
             if (url.includes('googleads') || url.includes('popads')) request.abort();
             else request.continue();
         });
 
-        // 🛡️ Anti-Popup: අලුත් පේජ් එකක් ඕපන් වුණොත් ඒක ඇනිමේ හෙවන් නෙමෙයි නම් වහනවා
         browser.on('targetcreated', async (target) => {
             const newPage = await target.page();
-            if (newPage) {
-                const url = newPage.url();
-                if (!url.includes('animeheaven.me')) {
-                    await newPage.close().catch(() => {});
-                    await page.bringToFront();
-                }
+            if (newPage && !newPage.url().includes('animeheaven.me')) {
+                await newPage.close().catch(() => {});
+                await page.bringToFront();
             }
         });
 
-        // 1. ඇනිමේ පේජ් එකට යාම
         await page.goto(animeUrl, { waitUntil: 'domcontentloaded' });
 
-        // 2. එපිසෝඩ් එක සිලෙක්ට් කරලා ක්ලික් කිරීම (FitGirl logic - repeat click)
-        console.log("Step 1: Clicking Episode Button...");
-        
-        let clicked = false;
+        // FitGirl Logic: Repeat click on Episode until link captured
         for (let i = 0; i < 5; i++) {
             if (capturedMp4) break;
-
-            clicked = await page.evaluate((ep) => {
+            await page.evaluate((ep) => {
                 const anchors = Array.from(document.querySelectorAll('.linetitle2 a'));
                 const target = anchors.find(a => a.querySelector('.watch2')?.innerText.trim() === String(ep));
-                if (target) {
-                    target.click();
-                    return true;
-                }
-                return false;
+                if (target) target.click();
             }, episodeNum);
-
-            if (clicked) {
-                console.log(`Click attempt ${i+1} successful, waiting for link...`);
-                await new Promise(r => setTimeout(r, 4000)); // ඇඩ්ස් ලෝඩ් වෙලා ලින්ක් එක එනකම් ඉන්නවා
-            }
-            if (capturedMp4) break;
+            await new Promise(r => setTimeout(r, 4000));
         }
 
-        if (!clicked) throw new Error("Episode not found!");
+        if (capturedMp4) return { success: true, episode: episodeNum, download_url: capturedMp4 };
+        else throw new Error("Could not capture MP4 link.");
 
-        // 3. ලින්ක් එක තාම අහුවුණේ නැත්නම් රතු පාට Download Button එක හොයලා ක්ලික් කරනවා
-        if (!capturedMp4) {
-            console.log("Step 2: Link not found in network, trying Download Button...");
-            const btnSelector = 'a[href*="video.mp4"]';
-            
-            for (let i = 0; i < 4; i++) {
-                if (capturedMp4) break;
-                
-                const btnExists = await page.evaluate((sel) => {
-                    const btn = document.querySelector(sel);
-                    if (btn) {
-                        btn.click();
-                        return true;
-                    }
-                    return false;
-                }, btnSelector);
-
-                if (btnExists) {
-                    console.log(`Download btn click ${i+1}...`);
-                    await new Promise(r => setTimeout(r, 3000));
-                }
-            }
-        }
-
-        if (capturedMp4) {
-            return { success: true, episode: episodeNum, download_url: capturedMp4 };
-        } else {
-            throw new Error("Could not capture link. Try again.");
-        }
-
-    } catch (e) {
-        console.error("Sniper Error:", e.message);
-        return { success: false, error: e.message };
-    } finally {
-        if (browser) await browser.close();
-    }
+    } catch (e) { return { success: false, error: e.message }; }
+    finally { if (browser) await browser.close(); }
 }
 
-// Routes
-app.get('/api/anime/search', async (req, res) => {
-    const query = req.query.q;
-    if (!query) return res.json({ success: false, error: "Query is required" });
-    res.json(await searchAnime(query));
-});
-
-// Episodes: http://localhost:5000/api/anime/episodes?url=ANIME_URL
-app.get('/api/anime/episodes', async (req, res) => {
-    const url = req.query.url;
-    if (!url) return res.json({ success: false, error: "Anime URL is required" });
-    res.json(await getEpisodes(url));
-});
-
-app.get('/api/anime/download', async (req, res) => {
-    const { url, ep } = req.query;
-    if (!url || !ep) return res.json({ success: false, error: "URL and Episode number required" });
-    
-    const result = await getDirectAnimeLink(url, ep);
-    res.json(result);
-});
-
+app.get('/api/anime/search', async (req, res) => res.json(await searchAnime(req.query.q)));
+app.get('/api/anime/episodes', async (req, res) => res.json(await getEpisodes(req.query.url)));
+app.get('/api/anime/download', async (req, res) => res.json(await getDirectAnimeLink(req.query.url, req.query.ep)));
+app.get('/api/search', async (req, res) => res.json(await searchGames(req.query.q)));
 app.get('/api/search', async (req, res) => res.json(await searchGames(req.query.q)));
 app.get('/api/files', async (req, res) => res.json(await getGameFiles(req.query.url)));
 app.get('/api/datanodes', async (req, res) => res.json(await getDirectDownload(req.query.url)));
