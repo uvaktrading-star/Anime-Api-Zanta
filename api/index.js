@@ -261,65 +261,89 @@ async function getEpisodes(animeUrl) {
 async function getDirectAnimeLink(animeUrl, episodeNum) {
     let browser;
     try {
+        console.log(`🚀 Sniping Episode ${episodeNum}...`);
         browser = await puppeteer.launch({
-            headless: true, // Display එක නැතුව වැඩ කරන්න
-            args: ['--no-sandbox', '--disable-setuid-sandbox']
+            headless: true,
+            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
         });
 
         const page = await browser.newPage();
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36');
 
-        // --- පියවර 1: අනවශ්‍ය Ads සහ Popups බ්ලොක් කිරීම ---
+        let capturedMp4 = null;
+
+        // 🎯 FitGirl එකේ වගේම request එක යනකොටම .mp4 ලින්ක් එක අල්ලගමු
         await page.setRequestInterception(true);
         page.on('request', (request) => {
             const url = request.url();
-            if (url.includes('googleads') || url.includes('doubleclick') || url.includes('adsystem') || url.includes('popads')) {
+            
+            // වීඩියෝ ෆයිල් එකේ ලින්ක් එක අහුවුණොත් සේව් කරගන්නවා
+            if (url.includes('video.mp4') || url.endsWith('.mp4')) {
+                capturedMp4 = url;
+            }
+
+            // අනවශ්‍ය ඇඩ්ස් බ්ලොක් කරනවා
+            if (url.includes('googleads') || url.includes('popads') || url.includes('doubleclick')) {
                 request.abort();
             } else {
                 request.continue();
             }
         });
 
-        // --- පියවර 2: ඇනිමේ පේජ් එකට යාම ---
-        await page.goto(animeUrl, { waitUntil: 'networkidle2' });
+        // 🛡️ ඇඩ්ස් පේජ් ආවොත් එවලෙම වහනවා (FitGirl logic)
+        browser.on('targetcreated', async (target) => {
+            if (target.type() === 'page') {
+                const adPage = await target.page();
+                if (adPage) {
+                    const url = adPage.url();
+                    if (!url.includes('animeheaven.me')) {
+                        await adPage.close().catch(() => {});
+                    }
+                }
+            }
+        });
 
-        // --- පියවර 3: අදාළ Episode එක සොයා ක්ලික් කිරීම ---
-        // 'watch2' class එක ඇතුළේ episode number එක තියෙන a tag එක හොයනවා
-        const episodeFound = await page.evaluate((epNum) => {
+        // 1. ඇනිමේ පේජ් එකට යනවා
+        await page.goto(animeUrl, { waitUntil: 'domcontentloaded' });
+
+        // 2. එපිසෝඩ් එක සිලෙක්ට් කරලා ක්ලික් කරනවා
+        const clicked = await page.evaluate((ep) => {
             const anchors = Array.from(document.querySelectorAll('.linetitle2 a'));
-            const target = anchors.find(a => a.querySelector('.watch2')?.innerText.trim() === String(epNum));
+            const target = anchors.find(a => a.querySelector('.watch2')?.innerText.trim() === String(ep));
             if (target) {
-                target.click(); // Episode එක ක්ලික් කරනවා
+                target.click();
                 return true;
             }
             return false;
         }, episodeNum);
 
-        if (!episodeFound) {
-            await browser.close();
-            return { success: false, error: "Episode not found!" };
+        if (!clicked) throw new Error("Episode not found!");
+
+        // 3. ලින්ක් එක අහුවෙනකම් පොඩ්ඩක් වෙලාව දෙනවා (Max 10s)
+        let timeout = 0;
+        while (!capturedMp4 && timeout < 10) {
+            await new Promise(r => setTimeout(r, 1000));
+            timeout++;
         }
 
-        // පේජ් එක load වෙනකම් පොඩ්ඩක් ඉන්නවා
-        await page.waitForNavigation({ waitUntil: 'networkidle2' });
-
-        // --- පියවර 4: Download Button එකෙන් Direct Link එක ගැනීම ---
-        // image_1209e9.png එකට අනුව <a href="...video.mp4..."> link එක ගන්නවා
-        const directLink = await page.evaluate(() => {
-            const downloadBtn = document.querySelector('a[href*="video.mp4"]');
-            return downloadBtn ? downloadBtn.href : null;
-        });
-
-        await browser.close();
-
-        if (directLink) {
-            return { success: true, episode: episodeNum, download_url: directLink };
+        if (capturedMp4) {
+            return { success: true, episode: episodeNum, download_url: capturedMp4 };
         } else {
-            return { success: false, error: "Direct download link could not be found." };
+            // පේජ් එකේ තියෙන බටන් එකෙන් කෙලින්ම බලමු (Fallback)
+            const fallbackLink = await page.evaluate(() => {
+                const btn = document.querySelector('a[href*="video.mp4"]');
+                return btn ? btn.href : null;
+            });
+            
+            if (fallbackLink) return { success: true, episode: episodeNum, download_url: fallbackLink };
+            throw new Error("Could not capture direct link.");
         }
 
     } catch (e) {
-        if (browser) await browser.close();
+        console.error("Sniper Error:", e.message);
         return { success: false, error: e.message };
+    } finally {
+        if (browser) await browser.close();
     }
 }
 
