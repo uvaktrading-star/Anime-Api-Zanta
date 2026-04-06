@@ -413,6 +413,121 @@ async function getCinesubzDirect(internalUrl) {
 
 //---------CINESUBZ--------
 
+async function searchCinesubz(query) {
+    try {
+        const searchUrl = `${CINESUBZ_BASE}/?s=${encodeURIComponent(query)}`;
+        const { data } = await axios.get(searchUrl, {
+            headers: { 'User-Agent': 'Mozilla/5.0' }
+        });
+        const $ = cheerio.load(data);
+        
+        let results = [];
+
+        // පින්තූරය අනුව 'div.display-item' ඇතුළේ තමයි data තියෙන්නේ
+        $('div.display-item').each((_, el) => {
+            const title = $(el).find('div.item-box a').attr('title');
+            const url = $(el).find('div.item-box a').attr('href');
+            const image = $(el).find('img').attr('data-original') || $(el).find('img').attr('src');
+            const rating = $(el).find('span.imdb-score').text().trim();
+            const quality = $(el).find('span.badge-quality-corner').text().trim();
+
+            if (title && url) {
+                results.push({
+                    title: title.replace('Sinhala Subtitles | සිංහල උපසිරැසි සමඟ', '').trim(),
+                    url: url,
+                    image: image,
+                    rating: rating || "N/A",
+                    quality: quality || "WebRip"
+                });
+            }
+        });
+
+        return { success: true, results };
+    } catch (e) {
+        return { success: false, error: e.message };
+    }
+}
+
+// --- පියවර 2: තෝරාගත් Movie එකේ Quality සහ Links (Internal) ටික ගැනීම ---
+async function getMovieData(url) {
+    try {
+        const { data } = await axios.get(url, {
+            headers: { 'User-Agent': 'Mozilla/5.0' }
+        });
+        const $ = cheerio.load(data);
+        
+        // --- Title එක හරියටම ගැනීම ---
+        // h1.entry-title නැත්නම් h1.item-name බලනවා
+        const title = $('h1.entry-title').text().trim() || $('h1').first().text().trim() || "Unknown Title";
+
+        // --- TV Series ද නැද්ද කියලා බලනවා ---
+        const isSeries = $('ul.episodes-list').length > 0;
+        
+        if (isSeries) {
+            // --- TV SERIES LOGIC ---
+            let episodes = [];
+            $('ul.episodes-list li').each((_, el) => {
+                const epLink = $(el).find('a.episode-link').attr('href');
+                const epNum = $(el).find('span.ep-num').text().trim();
+                const epName = $(el).find('span.ep-title').text().trim();
+                const epDate = $(el).find('span.ep-date').text().trim();
+
+                if (epLink) {
+                    episodes.push({
+                        episode: epNum,
+                        title: epName,
+                        date: epDate,
+                        url: epLink // මේ ලින්ක් එකට ගියාම තමයි Series එකේ download links හම්බෙන්නේ
+                    });
+                }
+            });
+
+            return { 
+                success: true, 
+                type: "series",
+                title: title.replace('Sinhala Subtitles | සිංහල උපසිරැසි සමඟ', '').trim(),
+                total_episodes: episodes.length,
+                episodes: episodes 
+            };
+
+        } else {
+            // --- MOVIE LOGIC ---
+            let downloadLinks = [];
+            $('div.movie-download-link-item').each((_, el) => {
+                const linkTag = $(el).find('a.movie-download-button');
+                const linkUrl = linkTag.attr('href');
+                
+                // Inspect එකට අනුව Quality සහ Size එක තියෙන්නේ 'movie-download-meta' class එකේ
+                let qualityInfo = $(el).find('span.movie-download-meta').text().trim();
+
+                // සමහර විට meta එකේ නැත්නම් info class එක බලමු
+                if (!qualityInfo) {
+                    qualityInfo = $(el).find('span.movie-download-info').text().trim();
+                    // අර අනවශ්‍ය කෑල්ල අයින් කරන්න
+                    qualityInfo = qualityInfo.replace(/Direct & Telegram Download Links/g, '').trim();
+                }
+
+                if (linkUrl) {
+                    downloadLinks.push({
+                        quality: qualityInfo || "Unknown Quality",
+                        internalUrl: linkUrl
+                    });
+                }
+            });
+
+            return { 
+                success: true, 
+                type: "movie",
+                title: title.replace('Sinhala Subtitles | සිංහල උපසිරැසි සමඟ', '').trim(),
+                links: downloadLinks 
+            };
+        }
+
+    } catch (e) {
+        return { success: false, error: e.message };
+    }
+}
+
 app.get('/api/cinesubz/search', async (req, res) => res.json(await searchCinesubz(req.query.q || "")));
 app.get('/api/cinesubz/movie', async (req, res) => res.json(await getMovieData(req.query.url || "")));
 app.get('/api/cinesubz/direct', async (req, res) => res.json(await getCinesubzDirect(req.query.url || "")));
