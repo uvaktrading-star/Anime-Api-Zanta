@@ -353,9 +353,19 @@ async function searchCartoons(query) {
     }
 }
 
-async function getCartoonDownload(cartoonUrl, epNum = null) {
+async function getCartoonDownload(inputUrl) {
     let browser;
     try {
+        // 🛠️ URL එක ඇතුළේ තියෙන Episode Number එක වෙන් කරගන්නවා
+        let cartoonUrl = inputUrl;
+        let epNum = null;
+
+        if (inputUrl.includes(',')) {
+            const parts = inputUrl.split(',');
+            cartoonUrl = parts[0].trim();
+            epNum = parseInt(parts[1].trim());
+        }
+
         browser = await puppeteer.launch({
             executablePath: HEROKU_CHROME_PATH,
             headless: true,
@@ -390,30 +400,27 @@ async function getCartoonDownload(cartoonUrl, epNum = null) {
             }
         });
 
-        await page.goto(cartoonUrl, { waitUntil: 'networkidle2', timeout: 30000 });
+        await page.goto(cartoonUrl, { waitUntil: 'networkidle2', timeout: 35000 });
 
         // --- 1. බලනවා මේකේ තියෙන්නේ Episode List එකක්ද කියලා ---
         const isSeries = await page.evaluate(() => {
-            const btn = Array.from(document.querySelectorAll('button, span')).find(el => 
+            const btn = Array.from(document.querySelectorAll('button, span, .download-btn')).find(el => 
                 el.innerText.toLowerCase().includes('select episode')
             );
             return !!btn;
         });
 
         if (isSeries && !epNum) {
-            console.log("📺 Series detected. Extracting episode list...");
-            
-            // Popup එක ඇරගන්නවා
+            console.log("📺 Series detected. Extracting list...");
             await page.evaluate(() => {
-                const btn = Array.from(document.querySelectorAll('button')).find(b => 
+                const btn = Array.from(document.querySelectorAll('button, .download-btn')).find(b => 
                     b.innerText.toLowerCase().includes('select episode')
                 );
                 if (btn) btn.click();
             });
 
-            await page.waitForSelector('.episode-popup-item', { timeout: 10000 });
+            await page.waitForSelector('.episode-popup-item', { timeout: 15000 });
 
-            // එපිසෝඩ් ලිස්ට් එක හරියටම ගන්නවා (image_aa4305.jpg අනුව)
             const episodes = await page.evaluate(() => {
                 const items = Array.from(document.querySelectorAll('.episode-popup-item'));
                 return items.map((item, index) => ({
@@ -422,24 +429,21 @@ async function getCartoonDownload(cartoonUrl, epNum = null) {
                     info: item.querySelector('.episode-popup-info')?.innerText.trim() || ""
                 }));
             });
-
             return { success: true, type: 'series', results: episodes };
         }
 
-        // --- 2. යූසර් එපිසෝඩ් එකක් ඉල්ලලා තියෙනවා නම් ඒක විතරක් Sniper කරනවා ---
+        // --- 2. එපිසෝඩ් එකක් ඉල්ලුවොත් ඒක Sniper කරනවා ---
         if (isSeries && epNum) {
             console.log(`🎯 Sniping Episode ${epNum}...`);
-            
             await page.evaluate(() => {
-                const btn = Array.from(document.querySelectorAll('button')).find(b => 
+                const btn = Array.from(document.querySelectorAll('button, .download-btn')).find(b => 
                     b.innerText.toLowerCase().includes('select episode')
                 );
                 if (btn) btn.click();
             });
 
-            await page.waitForSelector('.episode-popup-item', { timeout: 10000 });
+            await page.waitForSelector('.episode-popup-item', { timeout: 15000 });
 
-            // අදාළ එපිසෝඩ් එකේ බටන් එක ඔබනවා
             const clicked = await page.evaluate((targetNo) => {
                 const items = document.querySelectorAll('.episode-popup-item');
                 const target = items[targetNo - 1]?.querySelector('button.episode-popup-btn');
@@ -450,14 +454,14 @@ async function getCartoonDownload(cartoonUrl, epNum = null) {
                 return false;
             }, epNum);
 
-            if (!clicked) return { success: false, error: "Episode not found." };
+            if (!clicked) return { success: false, error: "Episode not found in popup." };
         } 
         
-        // --- 3. මූවී එකක් නම් සාමාන්‍ය විදියට බටන් එක ඔබනවා ---
+        // --- 3. මූවී එකක් නම් ---
         else {
             console.log("🎬 Movie detected. Sniping...");
             await page.evaluate(() => {
-                const btn = Array.from(document.querySelectorAll('button')).find(b => 
+                const btn = Array.from(document.querySelectorAll('button, .download-btn')).find(b => 
                     b.innerText.toLowerCase().includes('download') && 
                     !b.innerText.toLowerCase().includes('select')
                 );
@@ -465,20 +469,19 @@ async function getCartoonDownload(cartoonUrl, epNum = null) {
             });
         }
 
-        // 🔄 ලින්ක් එක අහුවෙනකම් ලූප් එක (Processing wait)
-        for (let i = 0; i < 10; i++) {
+        // 🔄 ලින්ක් එක එනකම් ඉන්නවා
+        for (let i = 0; i < 12; i++) {
             if (capturedUrl) break;
-            await new Promise(r => setTimeout(r, 2000));
-            if (capturedUrl) break;
+            await new Promise(r => setTimeout(r, 2500));
             
-            // ඇඩ් එකක් නිසා වැඩේ නැවතුණොත් ආයේ බටන් එක ඔබන්න
-            if (i % 2 === 0 && !capturedUrl) {
+            // Re-click if needed
+            if (i % 3 === 0 && !capturedUrl) {
                 await page.evaluate((isS, eN) => {
                     if (isS && eN) {
                         const items = document.querySelectorAll('.episode-popup-item');
                         items[eN - 1]?.querySelector('button.episode-popup-btn')?.click();
                     } else {
-                        const btn = Array.from(document.querySelectorAll('button')).find(b => 
+                        const btn = Array.from(document.querySelectorAll('button, .download-btn')).find(b => 
                             b.innerText.toLowerCase().includes('download') && !b.innerText.toLowerCase().includes('select')
                         );
                         if (btn) btn.click();
@@ -490,7 +493,7 @@ async function getCartoonDownload(cartoonUrl, epNum = null) {
         if (capturedUrl) {
             return { success: true, type: 'direct', download_url: capturedUrl };
         } else {
-            return { success: false, error: "Link capture timed out." };
+            return { success: false, error: "Link capture timed out. Processing page was too slow." };
         }
 
     } catch (e) {
