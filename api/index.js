@@ -13,6 +13,7 @@ const jar = new CookieJar();
 const client = wrapper(axios.create({ jar }));
 const BASE_URL = "https://fitgirl-repacks.site";
 const ANIME_BASE = "https://animeheaven.me";
+const CARTOONS_BASE = "https://cartoons.lk";
 const HEROKU_CHROME_PATH = '/app/.chrome-for-testing/chrome-linux64/chrome';
 
 //--------FITGIRL REPACK---------
@@ -310,6 +311,56 @@ async function getDirectAnimeLink(animeUrl, episodeNum) {
     } catch (e) { return { success: false, error: e.message }; }
     finally { if (browser) await browser.close(); }
 }
+
+//-------------------CARTOONS--------------------
+async function searchCartoons(query) {
+    try {
+        const searchUrl = `${CARTOONS_BASE}/?s=${encodeURIComponent(query)}`;
+        const { data } = await axios.get(searchUrl, {
+            headers: { 
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36' 
+            }
+        });
+        const $ = cheerio.load(data);
+        
+        let results = [];
+
+        // පින්තූරයේ (image_98edea.jpg) පේන විදියට 'article.item-list' ඇතුළේ තමයි data තියෙන්නේ
+        $('article.item-list').each((_, el) => {
+            const titleElement = $(el).find('h2.post-box-title a');
+            const title = titleElement.text().trim();
+            const url = titleElement.attr('href');
+            
+            // Image එක thumbnail එකෙන් ගන්නවා
+            const image = $(el).find('div.post-thumbnail img').attr('src');
+            
+            // පෝස්ට් එක දාපු දවස
+            const date = $(el).find('span.post-meta span.date').text().trim();
+
+            if (title && url) {
+                results.push({
+                    title: title.replace('Sinhala Dubbed | සිංහල හඬකැවූ', '').trim(),
+                    url: url,
+                    image: image,
+                    date: date || "Unknown"
+                });
+            }
+        });
+
+        return { success: true, count: results.length, results };
+    } catch (e) {
+        return { success: false, error: e.message };
+    }
+}
+
+
+// Search: http://localhost:5000/api/cartoons/search?q=harry+potter
+app.get('/api/cartoons/search', async (req, res) => {
+    const query = req.query.q;
+    if (!query) return res.json({ success: false, error: "Search query required" });
+    res.json(await searchCartoons(query));
+});
+
 
 app.get('/api/anime/search', async (req, res) => res.json(await searchAnime(req.query.q)));
 app.get('/api/anime/episodes', async (req, res) => res.json(await getEpisodes(req.query.url)));
