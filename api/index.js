@@ -366,72 +366,56 @@ app.get('/api/cinesubz/get-mp4', async (req, res) => {
             args: ['--no-sandbox', '--disable-setuid-sandbox']
         });
         const page = await browser.newPage();
-        let finalMp4 = null;
-
-        // 1. Sniffer එක දානවා හැම request එකක්ම අල්ලන්න
-        await page.setRequestInterception(true);
-        page.on('request', interceptedRequest => {
-            const url = interceptedRequest.url();
-            // මෙතනදී තමයි අර හොර ලින්ක් එක අහුවෙන්නේ
-            if (url.includes('.mp4') || url.includes('sume321.online') || url.includes('bot45')) {
-                finalMp4 = url;
-                console.log("🎯 >>> SNIPER DETECTED:", url);
-            }
-            interceptedRequest.continue();
-        });
-
-        // 2. Sonic Page එකට යනවා
-        console.log("LOG: Step 2 - Opening Sonic Cloud...");
-        await page.goto(sonicUrl, { waitUntil: 'networkidle2' });
         
-        // 3. Browser එක ඇතුළේම Fetch එකක් Run කරනවා
-        // මේකෙන් වෙන්නේ සයිට් එකේ Cookies පාවිච්චි කරලා POST එකක් බලෙන්ම යවන එක
-        console.log("LOG: Triggering Internal Fetch Sniper...");
-        finalMp4 = await page.evaluate(async () => {
-            try {
-                // පේජ් එකේ තියෙන Form එක හෝ Button එක ඇතුළේ තියෙන logic එක බලෙන් කරනවා
-                const response = await fetch(window.location.href, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
-                });
-                
-                // Redirect URL එක අල්ලගන්න බලනවා
-                if (response.url && (response.url.includes('.mp4') || response.url.includes('sume321'))) {
-                    return response.url;
-                }
-                return null;
-            } catch (e) { return null; }
+        let allCapturedLinks = []; // හැම ලින්ක් එකක්ම මෙතනට දාගන්නවා
+
+        await page.setRequestInterception(true);
+        
+        // 1. හැම Request එකක්ම ලොග් කරනවා
+        page.on('request', request => {
+            const url = request.url();
+            if (!url.includes('google') && !url.includes('analytics')) {
+                allCapturedLinks.push({ type: 'REQ', method: request.method(), url: url });
+            }
+            request.continue();
         });
 
-        // 4. ඒකෙන් බැරි වුණොත් සාමාන්‍ය විදිහට බටන් එක ඔබනවා
-        if (!finalMp4) {
-            console.log("LOG: Internal Fetch failed, clicking button manually...");
-            await page.evaluate(() => {
-                const btn = Array.from(document.querySelectorAll('a, button'))
-                                 .find(b => b.innerText.toLowerCase().includes('direct download'));
-                if (btn) btn.click();
-            });
-
-            // තත්පර 10ක් Network එක දිහා බලන් ඉන්නවා
-            for (let i = 0; i < 20; i++) {
-                if (finalMp4) break;
-                await new Promise(r => setTimeout(r, 500));
-            }
-        }
-
-        if (finalMp4) {
-            res.json({ success: true, mp4_url: finalMp4 });
-        } else {
-            // අන්තිම උත්සාහය: පේජ් එකේ තියෙන හැම ලින්ක් එකක්ම චෙක් කරනවා
-            const links = await page.evaluate(() => Array.from(document.querySelectorAll('a')).map(a => a.href));
-            const found = links.find(l => l.includes('sume321.online') || l.includes('.mp4'));
+        // 2. හැම Response එකක්ම ලොග් කරනවා (විශේෂයෙන් Redirects)
+        page.on('response', response => {
+            const url = response.url();
+            const status = response.status();
+            const headers = response.headers();
             
-            if (found) {
-                res.json({ success: true, mp4_url: found });
-            } else {
-                res.json({ success: false, error: "Sniper failed to find the link." });
+            if (status >= 300 && status <= 399) {
+                allCapturedLinks.push({ type: 'REDIRECT', status, url, location: headers['location'] });
             }
-        }
+            
+            if (url.includes('.mp4') || url.includes('sume321')) {
+                allCapturedLinks.push({ type: 'TARGET_MATCH', url });
+            }
+        });
+
+        console.log("LOG: Step 2 - Heavy Sniffing Started...");
+        await page.goto(sonicUrl, { waitUntil: 'networkidle2' });
+        await new Promise(r => setTimeout(r, 3000));
+
+        console.log("LOG: Clicking Button...");
+        await page.evaluate(() => {
+            const btn = Array.from(document.querySelectorAll('a, button'))
+                             .find(b => b.innerText.toLowerCase().includes('direct download'));
+            if (btn) btn.click();
+        });
+
+        // බටන් එක එබුවට පස්සේ තත්පර 10ක් නෙට්වර්ක් එක දෙස බලන් ඉන්නවා
+        await new Promise(r => setTimeout(r, 10000));
+
+        // දැන් අහුවුණ සේරම ලින්ක් ටික Response එක විදිහට යවනවා
+        // එතකොට අපිට පුළුවන් ඇත්තම ලින්ක් එක කොතනද හැංගිලා තියෙන්නේ කියලා හොයන්න
+        res.json({
+            success: true,
+            captured_count: allCapturedLinks.length,
+            links: allCapturedLinks
+        });
 
     } catch (e) {
         res.json({ success: false, error: e.message });
