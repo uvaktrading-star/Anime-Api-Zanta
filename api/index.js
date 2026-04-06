@@ -329,68 +329,61 @@ async function getCinesubzDirect(internalUrl) {
 
         let directDownloadUrl = null;
 
-        // 1. මුල් පේජ් එක load කරනවා
-        await page.goto(internalUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
-        console.log("Step 1: Waiting for 3s countdown...");
-        await new Promise(r => setTimeout(r, 6000)); // Countdown එකට අමතර කාලයක්
+        // --- පියවර 1: පළවෙනි පේජ් එක (Cinesubz) ---
+        await page.goto(internalUrl, { waitUntil: 'domcontentloaded' });
+        console.log("Step 1: Clicking Go to Download Page...");
+        await new Promise(r => setTimeout(r, 6000)); // Countdown එක ඉවර වෙනකම්
 
-        // 2. "Go to Download Page" එබීම සහ New Tabs හැසිරවීම
-        console.log("Step 2: Trying to reach download page...");
-        
+        // පේජ් එකේ තියෙන #link බටන් එක ඔබනවා (Ads එක්ක එන නිසා loop එකක් පාවිච්චි කරනවා)
         let downloadPage = null;
-
-        // බටන් එක වතාවක් නෙමෙයි 5 වතාවක් විතර ඔබලා බලමු (Ads bypass කරන්න)
         for (let i = 0; i < 5; i++) {
-            // "Go to Download Page" බටන් එක ඔබනවා
             await page.evaluate(() => {
-                const btn = document.querySelector('#link') || document.querySelector('.wait-done a');
+                const btn = document.querySelector('#link');
                 if (btn) btn.click();
             });
-
-            await new Promise(r => setTimeout(r, 3000)); // Tab එක ඇරෙනකම් ඉන්නවා
-
-            // දැනට ඇරිලා තියෙන හැම tab එකක්ම පරීක්ෂා කරනවා
+            await new Promise(r => setTimeout(r, 3000));
+            
             const pages = await browser.pages();
-            for (const p of pages) {
-                const url = p.url();
-                if (url.includes('sonic-cloud.online')) {
-                    downloadPage = p;
-                    console.log("🎯 Download page detected!");
-                    break;
-                } else if (p !== page) {
-                    // Ad එකක් නම් ඒ tab එක වහනවා
-                    await p.close().catch(() => {});
-                }
-            }
+            downloadPage = pages.find(p => p.url().includes('sonic-cloud.online'));
             if (downloadPage) break;
-            await page.bringToFront(); // ආයෙත් මුල් පේජ් එකට ඇවිත් click කරන්න ලෑස්ති වෙනවා
+            
+            // Ad tabs වහනවා
+            for (const p of pages) {
+                if (p !== page && !p.url().includes('sonic-cloud.online')) await p.close().catch(() => {});
+            }
+            await page.bringToFront();
         }
 
-        if (!downloadPage) throw new Error("Could not reach the download page after multiple attempts.");
+        if (!downloadPage) throw new Error("Could not reach the sonic-cloud page.");
 
-        // 3. Download Page එකේ "Direct Download (New)" බටන් එක එබීම
-        console.log("Step 3: Clicking 'Direct Download (New)'...");
+        // --- පියවර 2: Sonic-Cloud පේජ් එක (දැන් එවපු HTML එක තියෙන්නේ මෙතන) ---
+        console.log("Step 2: Processing Sonic-Cloud Page...");
         await downloadPage.bringToFront();
-        await downloadPage.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36');
 
-        // මෙතනදීත් Ads එන්න පුළුවන් නිසා Request Interception පාවිච්චි කරනවා
+        // Download ලින්ක් එක capture කරන්න ලෑස්ති වෙනවා
         await downloadPage.setRequestInterception(true);
         downloadPage.on('request', (request) => {
             const url = request.url();
-            if (url.includes('.mp4') || url.includes('server') && url.includes('download')) {
+            if (url.includes('.mp4') || (url.includes('server') && url.includes('download'))) {
                 directDownloadUrl = url;
             }
             request.continue();
         });
 
-        // බටන් එක ඔබනවා (image_8af54e.jpg එකේ විදියට text එක බලලා)
+        // 1. Loading screen එක අයින් වෙනකම් සහ බටන් එක එනකම් ඉන්නවා
+        console.log("Waiting for Download buttons to load...");
+        await downloadPage.waitForSelector('#dl-links a', { timeout: 20000 }).catch(() => {});
+
+        // 2. බටන් එක ක්ලික් කරනවා
+        // ඔයා එවපු HTML එකේ බටන් එක වැටෙන්නේ #dl-links ඇතුළේ <a> ටැග් එකක් විදිහට.
         await downloadPage.evaluate(() => {
-            const btns = Array.from(document.querySelectorAll('a, button'));
-            const target = btns.find(b => b.innerText.toLowerCase().includes('direct download (new)'));
+            const links = Array.from(document.querySelectorAll('#dl-links a'));
+            // "Direct Download (New)" හෝ "Download" තියෙන බටන් එක බලනවා
+            const target = links.find(l => l.innerText.toLowerCase().includes('download'));
             if (target) target.click();
         });
 
-        // අන්තිම ලින්ක් එක අහුවෙනකම් තත්පර 10ක් බලන් ඉන්නවා
+        // ලින්ක් එක අහුවෙනකම් තත්පර 10ක් බලන් ඉන්නවා
         for (let i = 0; i < 10; i++) {
             if (directDownloadUrl) break;
             await new Promise(r => setTimeout(r, 1000));
@@ -400,13 +393,13 @@ async function getCinesubzDirect(internalUrl) {
             console.log("✅ Success! Captured:", directDownloadUrl);
             return { success: true, direct_url: directDownloadUrl };
         } else {
-            // බටන් එකේ href එක හරි අරන් දෙමු
-            const finalHref = await downloadPage.evaluate(() => {
-                const target = Array.from(document.querySelectorAll('a')).find(b => b.innerText.toLowerCase().includes('direct download (new)'));
-                return target ? target.href : null;
+            // බැරිම වුණොත් තියෙන පළවෙනි ඩවුන්ලෝඩ් ලින්ක් එක හරි ගන්නවා
+            const fallback = await downloadPage.evaluate(() => {
+                const a = document.querySelector('#dl-links a');
+                return a ? a.href : null;
             });
-            if (finalHref) return { success: true, direct_url: finalHref };
-            throw new Error("Final download link could not be captured.");
+            if (fallback) return { success: true, direct_url: fallback };
+            throw new Error("Could not capture the final direct link.");
         }
 
     } catch (e) {
@@ -416,7 +409,6 @@ async function getCinesubzDirect(internalUrl) {
         if (browser) await browser.close();
     }
 }
-
 
 async function searchCinesubz(query) {
     try {
