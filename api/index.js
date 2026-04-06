@@ -318,86 +318,89 @@ async function getCinesubzDirect(internalUrl) {
     let browser;
     try {
         console.log("------------------------------------");
-        console.log("🚀 MASTER SNIPER ACTIVATED (POST CAPTURE)...");
+        console.log("🚀 DEBUG SNIPER STARTING...");
         browser = await puppeteer.launch({
             executablePath: HEROKU_CHROME_PATH,
             headless: true,
             args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
         });
 
-        const page = await browser.newPage();
-        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36');
-
         let finalMp4Link = null;
 
-        // 🔥 POST සහ GET රිකුවෙස්ට් දෙකම පරීක්ෂා කරනවා
-        await page.setRequestInterception(true);
-        page.on('request', (req) => {
-            const url = req.url();
-            // .mp4 තියෙන හෝ sume321.online වගේ domain එකකින් එන ලින්ක් එක අල්ලනවා
-            if (url.includes('.mp4') || url.includes('sume321.online') || url.includes('bot45')) {
-                finalMp4Link = url;
-                console.log("🎯 TARGET DETECTED IN REQUESTS:", url);
-            }
-            
-            // අනවශ්‍ය Ads බ්ලොක් කරලා speed එක වැඩි කරනවා
-            if (['image', 'font', 'stylesheet'].includes(req.resourceType()) || url.includes('adserver')) {
-                req.abort();
-            } else {
-                req.continue();
+        // 🔥 හැම පේජ් එකකටම (Tabs) Network Sniffer එකක් දාන Function එක
+        const attachSniffer = async (p) => {
+            await p.setRequestInterception(true);
+            p.on('request', (req) => {
+                const url = req.url();
+                const method = req.method();
+                
+                // හැම ලින්ක් එකක්ම ලොග් කරනවා (ගොඩක් එන නිසා වැදගත් ටික විතරක්)
+                if (!url.includes('google') && !url.includes('analytics') && !url.includes('adserver')) {
+                    console.log(`[NETWORK] ${method}: ${url.substring(0, 80)}...`);
+                }
+
+                if (url.includes('.mp4') || url.includes('sume321.online') || url.includes('bot45')) {
+                    finalMp4Link = url;
+                    console.log("🎯 >>> TARGET FOUND: ", url);
+                }
+
+                if (['image', 'font'].includes(req.resourceType())) req.abort();
+                else req.continue();
+            });
+        };
+
+        // අලුතින් ඇරෙන හැම Tab එකකටම ඉබේම Sniffer එක සම්බන්ධ කරනවා
+        browser.on('targetcreated', async (target) => {
+            if (target.type() === 'page') {
+                const newP = await target.page();
+                console.log("📂 New Tab Detected:", newP.url().substring(0, 50));
+                await attachSniffer(newP);
             }
         });
 
-        // Step 1: Cinesubz Page
+        const page = await browser.newPage();
+        await attachSniffer(page);
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36');
+
+        // Step 1: Loading Initial Page
         console.log("LOG: Loading Cinesubz...");
         await page.goto(internalUrl, { waitUntil: 'domcontentloaded' });
-        await new Promise(r => setTimeout(r, 4500));
+        await new Promise(r => setTimeout(r, 5000));
 
-        // Step 2: "Go to Download" (New tab එක capture කරමු)
+        // Step 2: Click Go to Download
         console.log("LOG: Clicking 'Go to Download Page'...");
-        const tabPromise = new Promise(res => browser.once('targetcreated', t => res(t.page())));
         await page.evaluate(() => {
             const btn = document.querySelector('#link') || document.querySelector('.wait-done a');
             if (btn) btn.click();
         });
 
-        const sonicPage = await tabPromise;
-        if (!sonicPage) throw new Error("Sonic page not opened.");
-        const sonicUrl = sonicPage.url();
-        console.log("LOG: Navigating to Sonic-Cloud:", sonicUrl);
-
-        // Step 3: Sonic Page එකේ වැඩේ (අලුත් පේජ් එකට Listener එක දානවා)
-        const finalPage = await browser.newPage();
-        await finalPage.setRequestInterception(true);
-        finalPage.on('request', (req) => {
-            const url = req.url();
-            // මෙතනදී තමයි අර sume321.online ලින්ක් එක අහුවෙන්නේ
-            if (url.includes('.mp4') || url.includes('sume321.online')) {
-                finalMp4Link = url;
-            }
-            req.continue();
-        });
-
-        await finalPage.goto(sonicUrl, { waitUntil: 'domcontentloaded' });
-        await new Promise(r => setTimeout(r, 6000)); // බටන් එක ලෝඩ් වෙනකම් පොඩි වෙලාවක්
-
-        console.log("LOG: Clicking 'Direct Download (New)'...");
-        await finalPage.evaluate(() => {
-            const btn = Array.from(document.querySelectorAll('a, button')).find(b => b.innerText.toLowerCase().includes('direct download'));
-            if (btn) btn.click();
-        });
-
-        // ලින්ක් එක capture වෙනකම් තත්පර 10ක් බලන් ඉන්නවා
-        for (let i = 0; i < 20; i++) {
+        // Step 3: Sonic-Cloud Page එකේ බටන් එක ඔබන්න බලමු
+        // අපි තත්පර 15ක් පුරා බ්‍රවුසර් එකේ ඇරිලා තියෙන හැම පේජ් එකකම බටන් එක හොයනවා
+        console.log("LOG: Searching for 'Direct Download' button in all tabs...");
+        for (let i = 0; i < 15; i++) {
             if (finalMp4Link) break;
-            await new Promise(r => setTimeout(r, 500));
+
+            const pages = await browser.pages();
+            for (const p of pages) {
+                if (p.url().includes('sonic-cloud.online')) {
+                    await p.evaluate(() => {
+                        const btn = Array.from(document.querySelectorAll('a, button'))
+                                         .find(b => b.innerText.toLowerCase().includes('direct download'));
+                        if (btn) {
+                            console.log("Button Found and Clicking...");
+                            btn.click();
+                        }
+                    }).catch(() => {});
+                }
+            }
+            await new Promise(r => setTimeout(r, 1000));
         }
 
         if (finalMp4Link) {
-            console.log("✅ SUCCESS! FINAL MP4:", finalMp4Link);
+            console.log("✅ FINAL SUCCESS:", finalMp4Link);
             return { success: true, direct_url: finalMp4Link };
         } else {
-            throw new Error("Final MP4 link not found in network traffic.");
+            throw new Error("Final MP4 link not found in any tab's network traffic.");
         }
 
     } catch (e) {
