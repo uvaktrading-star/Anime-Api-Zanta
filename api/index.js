@@ -371,75 +371,78 @@ app.get('/api/cinesubz/get-mp4', async (req, res) => {
         const page = await browser.newPage();
         let capturedDirectLink = null;
 
-        // 🛑 NETWORK SNIFFER: හැම රිකුවෙස්ට් එකක්ම පීරලා බලනවා
+        // 🎯 NETWORK SNIFFER: මේක තමයි අපේ ප්‍රධාන අවිය
         await page.setRequestInterception(true);
         page.on('request', (request) => {
             const url = request.url();
-            // මෙන්න මේ Keywords වලින් එකක් හරි තිබ්බොත් අපි ඒක අල්ලගන්නවා
+            // ඕනෑම තැනක sume321, bot45 හෝ .mp4 ගෑවිලා තිබ්බොත් අල්ලනවා
             if (url.includes('sume321.online') || url.includes('bot45') || url.includes('.mp4')) {
                 capturedDirectLink = url;
-                console.log("🎯 FOUND TARGET URL IN REQUEST:", url);
+                console.log("🎯 FOUND TARGET URL:", url);
             }
             request.continue();
         });
 
-        // Response එකේ Redirect එකක් විදිහට ආවොත් ඒකත් අල්ලනවා
-        page.on('response', response => {
-            const url = response.url();
-            if (url.includes('sume321.online') || url.includes('.mp4')) {
-                capturedDirectLink = url;
-            }
-        });
-
-        console.log("LOG: Loading Sonic Cloud and executing JS...");
+        console.log("LOG: Loading Sonic Cloud...");
         await page.goto(sonicUrl, { waitUntil: 'networkidle2', timeout: 60000 });
-
-        // JS Run වෙන්න සහ බටන් එක පේන්න තත්පර 5ක් ඉන්නවා
-        await new Promise(r => setTimeout(r, 5000));
+        await new Promise(r => setTimeout(r, 4000)); // JS Render වෙන්න වෙලාව දෙනවා
 
         console.log("LOG: Searching for the Button...");
-        const button = await page.evaluateHandle(() => {
-            const allElements = Array.from(document.querySelectorAll('a, button, div, span'));
-            return allElements.find(el => el.innerText && el.innerText.toLowerCase().includes('direct download'));
+        
+        // බටන් එක හරියටම අල්ලගන්නවා
+        const buttonHandle = await page.evaluateHandle(() => {
+            const elements = Array.from(document.querySelectorAll('a, button, div, span, b'));
+            return elements.find(el => el.innerText && el.innerText.toLowerCase().includes('direct download'));
         });
 
+        const button = buttonHandle.asElement();
+
         if (button) {
-            console.log("LOG: Button found! Clicking like a human...");
+            console.log("LOG: Button found! Attempting to click...");
+            
+            // පේජ් එක බටන් එක තියෙන තැනට Scroll කරනවා (පෙනෙන්න තිබිය යුතුයි ක්ලික් කරන්න නම්)
+            await button.scrollIntoViewIfNeeded();
+            
             const box = await button.boundingBox();
             if (box) {
                 // මවුස් එක බටන් එක මැදට ගෙනිහින් ක්ලික් කරනවා
                 await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+                console.log("LOG: Mouse Clicked successfully.");
             } else {
+                // Box එක නැත්නම් Force Click කරනවා
                 await page.evaluate(el => el.click(), button);
+                console.log("LOG: Force Clicked (No bounding box).");
             }
 
-            // බටන් එක එබුවම JavaScript එකෙන් අලුත් ලින්ක් එක Generate කරනකම් තත්පර 10ක් බලන් ඉන්නවා
-            console.log("LOG: Waiting for the magic link to appear in network...");
-            for (let i = 0; i < 20; i++) {
+            // බටන් එක එබුවම Network එකේ ලින්ක් එක එනකම් තත්පර 12ක් බලන් ඉන්නවා
+            console.log("LOG: Waiting for the link in network...");
+            for (let i = 0; i < 24; i++) {
                 if (capturedDirectLink) break;
                 await new Promise(r => setTimeout(r, 500));
             }
+        } else {
+            console.log("❌ Button NOT FOUND!");
         }
 
         if (capturedDirectLink) {
             res.json({ success: true, mp4_url: capturedDirectLink });
         } else {
-            // බැරිම වුණොත් පේජ් එකේ තියෙන ඔක්කොම ලින්ක්ස් ටිකක් එවන්න
+            // බැරිම වුණොත් පේජ් එකේ තියෙන ඔක්කොම ලින්ක්ස් ටික එවමු (Debug වලට)
             const allLinks = await page.evaluate(() => Array.from(document.querySelectorAll('a')).map(a => a.href));
             res.json({ 
                 success: false, 
-                error: "Direct link not captured by sniffer.",
-                links_on_page: allLinks.filter(l => l.includes('http')) 
+                error: "Link not captured after click.",
+                all_links: allLinks.filter(l => l.includes('http')).slice(0, 20) 
             });
         }
 
     } catch (e) {
+        console.error("❌ ERROR:", e.message);
         res.json({ success: false, error: e.message });
     } finally {
         if (browser) await browser.close();
     }
 });
-
 async function searchCinesubz(query) {
     try {
         const searchUrl = `${CINESUBZ_BASE}/?s=${encodeURIComponent(query)}`;
