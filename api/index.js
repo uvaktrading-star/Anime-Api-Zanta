@@ -358,48 +358,80 @@ app.get('/api/cinesubz/get-sonic', async (req, res) => {
 
 app.get('/api/cinesubz/get-mp4', async (req, res) => {
     const sonicUrl = req.query.url;
+    if (!sonicUrl) return res.json({ success: false, error: "URL is required" });
+
     let browser;
     try {
         browser = await puppeteer.launch({
-            executablePath: HEROKU_CHROME_PATH, headless: true,
-            args: ['--no-sandbox']
+            executablePath: HEROKU_CHROME_PATH,
+            headless: true,
+            args: ['--no-sandbox', '--disable-setuid-sandbox']
         });
+
         const page = await browser.newPage();
         let finalMp4 = null;
 
+        // 🛑 Network Sniffer එක ශක්තිමත් කරනවා
         await page.setRequestInterception(true);
-        page.on('request', (req) => {
-            const url = req.url();
-            // .mp4 හෝ sume321 domain එක අල්ලනවා
+        page.on('request', (request) => {
+            const url = request.url();
+            // .mp4 තියෙන හෝ sume321 domain එක තියෙන ඕනෑම දෙයක් අල්ලනවා
             if (url.includes('.mp4') || url.includes('sume321.online') || url.includes('bot45')) {
                 finalMp4 = url;
+                console.log("🎯 >>> FOUND TARGET IN REQUEST:", url);
             }
-            req.continue();
+            request.continue();
+        });
+
+        // Response Headers වල .mp4 තියෙනවද කියලත් බලනවා
+        page.on('response', (response) => {
+            const url = response.url();
+            if (url.includes('.mp4') || url.includes('sume321.online')) {
+                finalMp4 = url;
+            }
         });
 
         console.log("LOG: Loading Sonic Page Step 2...");
-        await page.goto(sonicUrl, { waitUntil: 'domcontentloaded' });
-        await new Promise(r => setTimeout(r, 5000)); // බටන් එක ලෝඩ් වෙන්න වෙලාව
+        await page.goto(sonicUrl, { waitUntil: 'networkidle2', timeout: 30000 });
 
-        // Direct Download බටන් එක ඔබනවා
+        // බටන් එක ඔබන්න කලින් තත්පර 3ක් ඉන්නවා
+        await new Promise(r => setTimeout(r, 3000));
+
+        console.log("LOG: Clicking Direct Download Button...");
         await page.evaluate(() => {
-            const btn = Array.from(document.querySelectorAll('a, button'))
-                             .find(b => b.innerText.toLowerCase().includes('direct download'));
-            if (btn) btn.click();
+            //innerText එකෙන් බටන් එක හොයනවා
+            const btns = Array.from(document.querySelectorAll('a, button'));
+            const target = btns.find(b => b.innerText.toLowerCase().includes('direct download'));
+            if (target) {
+                target.style.border = "5px solid red"; // Debugging වලට
+                target.click();
+            }
         });
 
-        // ලින්ක් එක අහුවෙනකම් තත්පර 8ක් බලන් ඉන්නවා
-        for (let i = 0; i < 16; i++) {
+        // ලින්ක් එක අහුවෙනකම් තත්පර 10ක් ලූපයකින් චෙක් කරනවා
+        for (let i = 0; i < 20; i++) {
             if (finalMp4) break;
             await new Promise(r => setTimeout(r, 500));
         }
 
         if (finalMp4) {
+            console.log("✅ SUCCESS:", finalMp4);
             res.json({ success: true, mp4_url: finalMp4 });
         } else {
-            res.json({ success: false, error: "MP4 not found" });
+            // බැරිම වුණොත් බටන් එකේ href එක හරි අරන් බලමු
+            const fallback = await page.evaluate(() => {
+                const a = Array.from(document.querySelectorAll('a')).find(b => b.innerText.toLowerCase().includes('direct download'));
+                return a ? a.href : null;
+            });
+            
+            if (fallback && (fallback.includes('.mp4') || fallback.includes('sume321'))) {
+                res.json({ success: true, mp4_url: fallback });
+            } else {
+                res.json({ success: false, error: "Final MP4 link not captured." });
+            }
         }
     } catch (e) {
+        console.error("❌ ERROR in Step 2:", e.message);
         res.json({ success: false, error: e.message });
     } finally {
         if (browser) await browser.close();
