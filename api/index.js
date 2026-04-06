@@ -363,84 +363,77 @@ async function getCartoonDownload(cartoonUrl) {
         });
 
         const page = await browser.newPage();
-        
-        // Timeout එක 30s වලට අඩුවෙන් තියාගන්න (Heroku H12 Error එක නවත්තන්න)
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 28000); 
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36');
 
         let capturedUrl = null;
 
-        // 🎯 NETWORK LISTENER
-        page.on('request', request => {
-            const url = request.url();
-            // .mp4 හෝ files.cartoons.lk ලින්ක් එකක් ආවොත් එවලෙම අල්ලනවා
+        // 🎯 REDIRECT SNIFFER: download-proxy එකේ Redirect එක අල්ලනවා
+        page.on('response', async (response) => {
+            const url = response.url();
+            
+            // අපි හොයන download-proxy ලින්ක් එක ආවම
+            if (url.includes('download-proxy')) {
+                const status = response.status();
+                
+                // 302 Found (Redirect) එකක් නම් Location එක බලනවා
+                if (status >= 300 && status <= 308) {
+                    const headers = response.headers();
+                    if (headers['location']) {
+                        capturedUrl = headers['location'];
+                        console.log("🎯 Direct Link Captured from Proxy Redirect:", capturedUrl);
+                    }
+                }
+            }
+            
+            // හදිසියේ හරි කෙලින්ම MP4 එකක් Network එකේ ගියොත් ඒකත් ගන්නවා
             if (url.includes('.mp4') || url.includes('files.cartoons.lk')) {
                 capturedUrl = url;
             }
         });
 
-        // 🛡️ IMPROVED AD-TAB CLOSER
+        // 🛡️ AD-TAB CLOSER
         browser.on('targetcreated', async (target) => {
-            if (target.type() === 'page') {
-                const newPage = await target.page();
-                if (newPage) {
-                    const url = newPage.url();
-                    // cartoons.lk නොවන ඕනෑම එකක් ඇඩ් එකක් ලෙස සලකා වසනවා
-                    if (!url.includes('cartoons.lk')) {
-                        await newPage.close().catch(() => {});
-                        // මුල් පිටුවට focus එක දෙනවා ඊළඟ click එකට
-                        await page.bringToFront().catch(() => {});
-                    }
-                }
+            const adPage = await target.page();
+            if (adPage && !adPage.url().includes('cartoons.lk')) {
+                await adPage.close().catch(() => {});
             }
         });
 
-        await page.goto(cartoonUrl, { waitUntil: 'domcontentloaded', timeout: 25000 });
+        await page.goto(cartoonUrl, { waitUntil: 'networkidle2', timeout: 30000 });
 
-        const btnSelector = 'button.direct-download-btn';
-        await page.waitForSelector(btnSelector, { timeout: 10000 });
+        console.log("🚀 Starting Sniping...");
 
-        console.log("🚀 Sniping started...");
-        
-        // ලින්ක් එක ලැබෙනකම් විතරක් Loop එක රන් කරනවා
-        for (let i = 0; i < 6; i++) { 
+        for (let i = 0; i < 8; i++) {
             if (capturedUrl) break;
 
-            // පේජ් එක ඇතුළේ Click එක කරනවා
-            await page.evaluate((sel) => {
-                const btn = document.querySelector(sel);
-                if (btn) btn.click();
-            }, btnSelector);
+            // බටන් එක ඔබන්න (Text එක අනුව හොයන එක වඩාත් සාර්ථකයි)
+            await page.evaluate(() => {
+                const buttons = Array.from(document.querySelectorAll('button, a'));
+                const target = buttons.find(b => 
+                    b.innerText.toLowerCase().includes('download')
+                );
+                if (target) target.click();
+            });
 
-            // ක්ලික් එකෙන් පස්සේ ඇඩ් එකක් ආවා නම් ඒක අයින් වෙන්න තත්පර 1.5ක් දෙනවා
-            await new Promise(r => setTimeout(r, 1500));
+            // ක්ලික් එකට පස්සේ ඇඩ් එක වැහෙනකම් සහ Proxy ලින්ක් එක එනකම් ඉන්නවා
+            // ඔයා කිව්ව වගේ processing එකට වෙලාව යන නිසා මෙතන 3s ක් දෙනවා
+            await new Promise(r => setTimeout(r, 3000));
             
-            // ලින්ක් එක අහුවුණාද කියලා හැම තිස්සෙම චෙක් කරනවා
-            if (capturedUrl) break;
-
-            // දෙවැනි ක්ලික් එකේදී තමයි ගොඩක් වෙලාවට Processing පටන් ගන්නේ
-            // ඒ නිසා තව තත්පර 2ක් ඉඳලා බලනවා (Total 3.5s per loop)
-            await new Promise(r => setTimeout(r, 2000));
             if (capturedUrl) break;
         }
 
-        clearTimeout(timeoutId);
-
         if (capturedUrl) {
-            console.log("🎯 Success:", capturedUrl);
             return { success: true, download_url: capturedUrl };
         } else {
-            return { success: false, error: "Link capture failed. Try again." };
+            return { success: false, error: "Processing timed out or link not found." };
         }
 
     } catch (e) {
-        console.error("Puppeteer Error:", e.message);
         return { success: false, error: e.message };
     } finally {
         if (browser) await browser.close();
     }
 }
-
 
 // Search: http://localhost:5000/api/cartoons/search?q=harry+potter
 app.get('/api/cartoons/search', async (req, res) => {
