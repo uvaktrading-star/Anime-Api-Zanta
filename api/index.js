@@ -353,6 +353,99 @@ async function searchCartoons(query) {
     }
 }
 
+async function getCartoonDownload(cartoonUrl) {
+    let browser;
+    try {
+        console.log("🚀 Starting Universal Sniffer...");
+        browser = await puppeteer.launch({
+            executablePath: HEROKU_CHROME_PATH,
+            headless: true,
+            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+        });
+
+        const page = await browser.newPage();
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36');
+
+        let finalDownloadUrl = null;
+
+        // 🎯 SNIFFER: ඕනෑම Redirect එකක් හෝ Download Request එකක් අල්ලනවා
+        page.on('response', response => {
+            const url = response.url();
+            const status = response.status();
+            
+            // සාමාන්‍යයෙන් ඩවුන්ලෝඩ් එකක් වෙද්දී 302 Redirect එකක් හෝ කෙලින්ම file ලින්ක් එකක් එනවා
+            if (status >= 300 && status <= 308) {
+                const redirectUrl = response.headers()['location'];
+                if (redirectUrl && !redirectUrl.includes('googleads')) {
+                    finalDownloadUrl = redirectUrl;
+                }
+            }
+            
+            // පේජ් එකේ Content-Type එක 'application/octet-stream' හෝ '.mp4' වගේ නම් ඒක අල්ලනවා
+            const contentType = response.headers()['content-type'];
+            if (contentType && (contentType.includes('video') || contentType.includes('application'))) {
+                if (!url.includes('cartoons.lk')) finalDownloadUrl = url;
+            }
+        });
+
+        // 🛡️ AD-BLOCKER & TAB CLOSER: අලුත් ටැබ් ආවොත් වහනවා
+        browser.on('targetcreated', async (target) => {
+            const newPage = await target.page();
+            if (newPage) {
+                const url = newPage.url();
+                if (!url.includes('cartoons.lk') && url !== 'about:blank') {
+                    console.log("🚫 Ad Tab Blocked:", url);
+                    await newPage.close().catch(() => {});
+                    await page.bringToFront();
+                }
+            }
+        });
+
+        await page.goto(cartoonUrl, { waitUntil: 'domcontentloaded' });
+
+        const btnSelector = 'button.direct-download-btn';
+        await page.waitForSelector(btnSelector, { timeout: 10000 });
+
+        console.log("Step: Triggering Download...");
+
+        // 🔄 Loop එකක් දාලා බටන් එක ඔබනවා ලින්ක් එක අහුවෙනකම්
+        for (let i = 0; i < 5; i++) {
+            if (finalDownloadUrl) break;
+
+            console.log(`Attempt ${i + 1}: Clicking button...`);
+            
+            // බටන් එක ඔබනවා
+            await page.evaluate((sel) => {
+                const btn = document.querySelector(sel);
+                if (btn) btn.click();
+            }, btnSelector);
+
+            // ⏳ ඔයා කිව්ව වගේ Processing වෙන්න වෙලාව දෙනවා
+            // පළවෙනි ක්ලික් එකේදී ඇඩ් එකක් ආවොත් ඒක ක්ලෝස් වෙලා දෙවැනි පාරේදී Processing පටන් ගනීවි
+            await new Promise(r => setTimeout(r, 8000)); 
+
+            // තත්පර 8කට පස්සේ පේජ් එකේ වෙනස් වෙච්ච අලුත් ලින්ක් තියෙනවද බලනවා
+            const currentUrl = page.url();
+            if (currentUrl !== cartoonUrl && !currentUrl.includes('cartoons.lk')) {
+                finalDownloadUrl = currentUrl;
+                break;
+            }
+        }
+
+        if (finalDownloadUrl) {
+            console.log("🎯 Link Captured:", finalDownloadUrl);
+            return { success: true, download_url: finalDownloadUrl };
+        } else {
+            return { success: false, error: "Download link could not be captured." };
+        }
+
+    } catch (e) {
+        return { success: false, error: e.message };
+    } finally {
+        if (browser) await browser.close();
+    }
+}
+
 
 // Search: http://localhost:5000/api/cartoons/search?q=harry+potter
 app.get('/api/cartoons/search', async (req, res) => {
@@ -361,6 +454,11 @@ app.get('/api/cartoons/search', async (req, res) => {
     res.json(await searchCartoons(query));
 });
 
+app.get('/api/cartoons/download', async (req, res) => {
+    const url = req.query.url;
+    if (!url) return res.json({ success: false, error: "Cartoon URL required" });
+    res.json(await getCartoonDownload(url));
+});
 
 app.get('/api/anime/search', async (req, res) => res.json(await searchAnime(req.query.q)));
 app.get('/api/anime/episodes', async (req, res) => res.json(await getEpisodes(req.query.url)));
