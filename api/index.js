@@ -357,54 +357,86 @@ app.get('/api/cinesubz/get-sonic', async (req, res) => {
 });
 
 app.get('/api/cinesubz/get-mp4', async (req, res) => {
-    const sonicUrl = req.query.url; 
+    const sonicUrl = req.query.url;
     if (!sonicUrl) return res.json({ success: false, error: "URL is required" });
 
+    let browser;
     try {
-        console.log("LOG: Sniping Direct Link via POST...");
+        browser = await puppeteer.launch({
+            executablePath: HEROKU_CHROME_PATH,
+            headless: true,
+            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-web-security']
+        });
 
-        // 1. අපි කෙලින්ම සයිට් එකට කියනවා අපිට Download එක ඕනේ කියලා POST එකක් යවලා
-        const response = await axios.post(sonicUrl, 
-            "download=true", // මේක තමයි බටන් එක එබුවම යන Data එක
-            {
-                headers: {
-                    'Content-Type': 'application/x-www-form-urlencoded',
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
-                    'Referer': sonicUrl,
-                    'Origin': 'https://bot3.sonic-cloud.online'
-                },
-                maxRedirects: 0, // Redirect එක auto වෙන්න දෙන්නේ නැහැ, අපිට ඒ ලින්ක් එක අල්ලගන්න ඕන නිසා
-                validateStatus: (status) => status >= 200 && status < 400 
+        const page = await browser.newPage();
+        let capturedDirectLink = null;
+
+        // 🛑 NETWORK SNIFFER: හැම රිකුවෙස්ට් එකක්ම පීරලා බලනවා
+        await page.setRequestInterception(true);
+        page.on('request', (request) => {
+            const url = request.url();
+            // මෙන්න මේ Keywords වලින් එකක් හරි තිබ්බොත් අපි ඒක අල්ලගන්නවා
+            if (url.includes('sume321.online') || url.includes('bot45') || url.includes('.mp4')) {
+                capturedDirectLink = url;
+                console.log("🎯 FOUND TARGET URL IN REQUEST:", url);
             }
-        );
+            request.continue();
+        });
 
-        // 2. Redirect URL එක අල්ලගන්නවා (302 Found)
-        let directLink = response.headers['location'];
+        // Response එකේ Redirect එකක් විදිහට ආවොත් ඒකත් අල්ලනවා
+        page.on('response', response => {
+            const url = response.url();
+            if (url.includes('sume321.online') || url.includes('.mp4')) {
+                capturedDirectLink = url;
+            }
+        });
 
-        // 3. සමහර වෙලාවට ලින්ක් එක බොඩි එකේ තියෙන්න පුළුවන් (Fallback)
-        if (!directLink && response.data) {
-            const match = response.data.match(/https?:\/\/[^\s"'<>]+sume321\.online[^\s"'<>]*/);
-            if (match) directLink = match[0];
+        console.log("LOG: Loading Sonic Cloud and executing JS...");
+        await page.goto(sonicUrl, { waitUntil: 'networkidle2', timeout: 60000 });
+
+        // JS Run වෙන්න සහ බටන් එක පේන්න තත්පර 5ක් ඉන්නවා
+        await new Promise(r => setTimeout(r, 5000));
+
+        console.log("LOG: Searching for the Button...");
+        const button = await page.evaluateHandle(() => {
+            const allElements = Array.from(document.querySelectorAll('a, button, div, span'));
+            return allElements.find(el => el.innerText && el.innerText.toLowerCase().includes('direct download'));
+        });
+
+        if (button) {
+            console.log("LOG: Button found! Clicking like a human...");
+            const box = await button.boundingBox();
+            if (box) {
+                // මවුස් එක බටන් එක මැදට ගෙනිහින් ක්ලික් කරනවා
+                await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+            } else {
+                await page.evaluate(el => el.click(), button);
+            }
+
+            // බටන් එක එබුවම JavaScript එකෙන් අලුත් ලින්ක් එක Generate කරනකම් තත්පර 10ක් බලන් ඉන්නවා
+            console.log("LOG: Waiting for the magic link to appear in network...");
+            for (let i = 0; i < 20; i++) {
+                if (capturedDirectLink) break;
+                await new Promise(r => setTimeout(r, 500));
+            }
         }
 
-        if (directLink) {
-            console.log("✅ SUCCESS! Captured Direct Link:", directLink);
-            res.json({ success: true, mp4_url: directLink });
+        if (capturedDirectLink) {
+            res.json({ success: true, mp4_url: capturedDirectLink });
         } else {
-            // මේකත් බැරි වුණොත් මචං පේජ් එකේ Source එකේ හැංගිලා තියෙනවද බලමු
+            // බැරිම වුණොත් පේජ් එකේ තියෙන ඔක්කොම ලින්ක්ස් ටිකක් එවන්න
+            const allLinks = await page.evaluate(() => Array.from(document.querySelectorAll('a')).map(a => a.href));
             res.json({ 
                 success: false, 
-                error: "Direct link not found in headers.",
-                debug_info: "Try to check if the file is still available on server."
+                error: "Direct link not captured by sniffer.",
+                links_on_page: allLinks.filter(l => l.includes('http')) 
             });
         }
 
     } catch (e) {
-        // Axios 302 එකක් ආවම Error එකක් විදිහට සලකන්න පුළුවන්, ඒකයි මෙතනත් චෙක් කරන්නේ
-        if (e.response && e.response.headers && e.response.headers.location) {
-            return res.json({ success: true, mp4_url: e.response.headers.location });
-        }
         res.json({ success: false, error: e.message });
+    } finally {
+        if (browser) await browser.close();
     }
 });
 
