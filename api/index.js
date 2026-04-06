@@ -371,67 +371,68 @@ app.get('/api/cinesubz/get-mp4', async (req, res) => {
         const page = await browser.newPage();
         let finalMp4 = null;
 
-        // 🛑 Network Sniffer එක ශක්තිමත් කරනවා
+        // 🔥 විශේෂිත 'Untitled' Tab Capture එක:
+        // බටන් එක එබුවම ඇරෙන ඕනෑම අලුත් Target එකක් (Tab එකක්) මෙතනින් අහුවෙනවා
+        browser.on('targetcreated', async (target) => {
+            const newPage = await target.page();
+            if (newPage) {
+                const url = newPage.url();
+                if (url.includes('.mp4') || url.includes('sume321.online') || url.includes('bot45')) {
+                    finalMp4 = url;
+                    console.log("🎯 >>> CAPTURED FROM NEW TAB:", finalMp4);
+                }
+            }
+        });
+
+        // සාමාන්‍ය Network Interception එකත් තියමු (පරණ විදිහටම)
         await page.setRequestInterception(true);
         page.on('request', (request) => {
             const url = request.url();
-            // .mp4 තියෙන හෝ sume321 domain එක තියෙන ඕනෑම දෙයක් අල්ලනවා
-            if (url.includes('.mp4') || url.includes('sume321.online') || url.includes('bot45')) {
+            if (url.includes('.mp4') || url.includes('sume321.online')) {
                 finalMp4 = url;
-                console.log("🎯 >>> FOUND TARGET IN REQUEST:", url);
             }
             request.continue();
         });
 
-        // Response Headers වල .mp4 තියෙනවද කියලත් බලනවා
-        page.on('response', (response) => {
-            const url = response.url();
-            if (url.includes('.mp4') || url.includes('sume321.online')) {
-                finalMp4 = url;
-            }
-        });
-
-        console.log("LOG: Loading Sonic Page Step 2...");
-        await page.goto(sonicUrl, { waitUntil: 'networkidle2', timeout: 30000 });
-
-        // බටන් එක ඔබන්න කලින් තත්පර 3ක් ඉන්නවා
-        await new Promise(r => setTimeout(r, 3000));
+        console.log("LOG: Step 2 - Loading Sonic Page...");
+        await page.goto(sonicUrl, { waitUntil: 'networkidle2' });
+        
+        // පේජ් එක ලෝඩ් වුණාම පොඩි වෙලාවක් ඉමු (Processing එකට)
+        await new Promise(r => setTimeout(r, 4000));
 
         console.log("LOG: Clicking Direct Download Button...");
         await page.evaluate(() => {
-            //innerText එකෙන් බටන් එක හොයනවා
-            const btns = Array.from(document.querySelectorAll('a, button'));
-            const target = btns.find(b => b.innerText.toLowerCase().includes('direct download'));
-            if (target) {
-                target.style.border = "5px solid red"; // Debugging වලට
-                target.click();
+            const btn = Array.from(document.querySelectorAll('a, button'))
+                             .find(b => b.innerText.toLowerCase().includes('direct download'));
+            if (btn) {
+                btn.click();
             }
         });
 
-        // ලින්ක් එක අහුවෙනකම් තත්පර 10ක් ලූපයකින් චෙක් කරනවා
+        // ලින්ක් එක අහුවෙනකම් තත්පර 10ක් බලනවා
         for (let i = 0; i < 20; i++) {
-            if (finalMp4) break;
+            if (finalMp4 && finalMp4 !== 'about:blank') break;
             await new Promise(r => setTimeout(r, 500));
         }
 
-        if (finalMp4) {
-            console.log("✅ SUCCESS:", finalMp4);
+        if (finalMp4 && finalMp4 !== 'about:blank') {
+            console.log("✅ SUCCESS! FINAL URL:", finalMp4);
             res.json({ success: true, mp4_url: finalMp4 });
         } else {
-            // බැරිම වුණොත් බටන් එකේ href එක හරි අරන් බලමු
-            const fallback = await page.evaluate(() => {
+            // බැරිම වුණොත් මචං, බටන් එකේ පරණ විදිහට href එක හරි අරන් බලමු
+            const hrefFallback = await page.evaluate(() => {
                 const a = Array.from(document.querySelectorAll('a')).find(b => b.innerText.toLowerCase().includes('direct download'));
                 return a ? a.href : null;
             });
-            
-            if (fallback && (fallback.includes('.mp4') || fallback.includes('sume321'))) {
-                res.json({ success: true, mp4_url: fallback });
+            if (hrefFallback && hrefFallback.includes('http')) {
+                res.json({ success: true, mp4_url: hrefFallback });
             } else {
-                res.json({ success: false, error: "Final MP4 link not captured." });
+                res.json({ success: false, error: "Could not capture download trigger." });
             }
         }
+
     } catch (e) {
-        console.error("❌ ERROR in Step 2:", e.message);
+        console.error("❌ ERROR:", e.message);
         res.json({ success: false, error: e.message });
     } finally {
         if (browser) await browser.close();
