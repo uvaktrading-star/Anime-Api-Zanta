@@ -318,7 +318,7 @@ async function getCinesubzDirect(internalUrl) {
     let browser;
     try {
         console.log("------------------------------------");
-        console.log("🚀 FINAL SNIPER STARTING...");
+        console.log("🚀 PRO SNIPER ACTIVATED...");
         browser = await puppeteer.launch({
             executablePath: HEROKU_CHROME_PATH,
             headless: true,
@@ -327,97 +327,98 @@ async function getCinesubzDirect(internalUrl) {
 
         const page = await browser.newPage();
         
-        // ⚡ Speed Hack: පින්තූර සහ CSS නවත්තනවා (Heroku 30s limit එකට අත්‍යවශ්‍යයි)
+        // පේජ් එක වේගවත් කිරීමට අනවශ්‍ය දේවල් බ්ලොක් කරනවා
         await page.setRequestInterception(true);
         page.on('request', (req) => {
-            if (['image', 'stylesheet', 'font'].includes(req.resourceType())) req.abort();
+            if (['image', 'font'].includes(req.resourceType())) req.abort();
             else req.continue();
         });
 
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36');
 
-        // --- STEP 1: Cinesubz Page ---
-        console.log("LOG: Loading Cinesubz page...");
+        // --- පියවර 1: Cinesubz Redirect Page ---
+        console.log("LOG: Loading Cinesubz redirect page...");
         await page.goto(internalUrl, { waitUntil: 'domcontentloaded' });
-        await new Promise(r => setTimeout(r, 4500)); // 3s Countdown + Safety
+        await new Promise(r => setTimeout(r, 4500));
 
-        let rawTargetUrl = null;
-        console.log("LOG: Clicking 'Go to Download Page'...");
-        
-        // Tab එක capture කරන්න Listener එකක් දානවා
-        const targetPromise = new Promise(x => browser.once('targetcreated', t => x(t.page())));
-        
+        let sonicCloudUrl = null;
+        console.log("LOG: Triggering 'Go to Download Page'...");
+
+        // බටන් එක එබුවම ඇරෙන අලුත් Tab එකේ ලින්ක් එක අල්ලගන්නවා
+        const tabPromise = new Promise(resolve => browser.once('targetcreated', target => resolve(target.page())));
         await page.evaluate(() => {
-            const btn = document.querySelector('#link');
+            const btn = document.querySelector('#link') || document.querySelector('.wait-done a');
             if (btn) btn.click();
         });
 
-        const newTab = await targetPromise;
-        if (newTab) {
-            rawTargetUrl = newTab.url();
-            console.log("LOG: Captured URL:", rawTargetUrl);
-            await newTab.close().catch(() => {});
+        const sonicPage = await tabPromise;
+        if (sonicPage) {
+            sonicCloudUrl = sonicPage.url();
+            console.log("🎯 SONIC PAGE CAPTURED:", sonicCloudUrl);
+            await sonicPage.close().catch(() => {});
         }
 
-        if (!rawTargetUrl) throw new Error("Target URL not captured");
+        if (!sonicCloudUrl) throw new Error("Could not capture Sonic-Cloud URL");
 
-        // --- STEP 2: Handle JSON Redirect ---
-        let finalPageUrl = rawTargetUrl;
-        if (rawTargetUrl.includes('/api/download-data/')) {
-            console.log("LOG: JSON Redirect detected. Fetching real path...");
-            const { data } = await axios.get(rawTargetUrl);
-            if (data.success && data.redirect) {
-                finalPageUrl = `https://bot3.sonic-cloud.online${data.redirect}`;
-                console.log("LOG: Reconstructed URL:", finalPageUrl);
-            }
-        }
-
-        // --- STEP 3: Final Sonic-Cloud Page ---
-        console.log("LOG: Navigating to final download page...");
+        // --- පියවර 2: Final Download Page (Sonic-Cloud) ---
+        console.log("LOG: Navigating to Sonic-Cloud...");
         const finalPage = await browser.newPage();
-        let directMp4 = null;
+        let finalMp4Link = null;
 
-        // .mp4 ලින්ක් එක එනකම් අහගෙන ඉන්නවා
+        // 🔥 ලින්ක් එක අල්ලගන්න දැල් 3ක් දානවා:
+        // 1. Request Listener (Background requests)
         finalPage.on('request', (req) => {
             const url = req.url();
-            if (url.includes('.mp4') || (url.includes('server') && url.includes('download'))) {
-                directMp4 = url;
+            if (url.includes('.mp4') || url.includes('drive.google.com/download') || (url.includes('server') && url.includes('download'))) {
+                finalMp4Link = url;
             }
         });
 
-        await finalPage.goto(finalPageUrl, { waitUntil: 'domcontentloaded' });
-        
-        console.log("LOG: Waiting 5s for buttons to load...");
-        await new Promise(r => setTimeout(r, 5500));
-
-        console.log("LOG: Clicking 'Direct Download' button...");
-        const clicked = await finalPage.evaluate(() => {
-            const btn = document.querySelector('#dl-links a') || 
-                        Array.from(document.querySelectorAll('a')).find(a => a.innerText.toLowerCase().includes('download'));
-            if (btn) {
-                btn.click();
-                return true;
-            }
-            return false;
+        // 2. Response Listener (Headers වල download ලින්ක් එක තිබුණොත්)
+        finalPage.on('response', (res) => {
+            const url = res.url();
+            if (url.includes('.mp4')) finalMp4Link = url;
         });
 
-        // ලින්ක් එක අහුවෙනකම් තව තත්පර 3ක් බලනවා
-        for (let i = 0; i < 6; i++) {
-            if (directMp4) break;
+        // 3. New Tab Listener (බටන් එක එබුවම "Untitled" tab එකක් ඇරුණොත් ඒකෙ URL එක ගන්නවා)
+        browser.on('targetcreated', async (target) => {
+            const url = target.url();
+            if (url.includes('.mp4') || url.includes('server')) {
+                finalMp4Link = url;
+            }
+        });
+
+        await finalPage.goto(sonicCloudUrl, { waitUntil: 'domcontentloaded' });
+        await new Promise(r => setTimeout(r, 5500)); // බටන් එක ලෝඩ් වෙනකම්
+
+        console.log("LOG: Clicking 'Direct Download (New)'...");
+        await finalPage.evaluate(() => {
+            // හරියටම බටන් එක සොයාගෙන ක්ලික් කරනවා
+            const btns = Array.from(document.querySelectorAll('a, button'));
+            const target = btns.find(b => b.innerText.toLowerCase().includes('direct download'));
+            if (target) {
+                target.setAttribute('target', '_self'); // අලුත් tab එකකට යන එක වළක්වා ඒකෙම ලෝඩ් කරනවා ලේසියට
+                target.click();
+            }
+        });
+
+        // ලින්ක් එක capture වෙනකම් තත්පර 8ක් පුරා බලන් ඉන්නවා
+        for (let i = 0; i < 16; i++) {
+            if (finalMp4Link) break;
             await new Promise(r => setTimeout(r, 500));
         }
 
-        if (directMp4) {
-            console.log("✅ SUCCESS! FINAL MP4:", directMp4);
-            return { success: true, direct_url: directMp4 };
+        if (finalMp4Link) {
+            console.log("✅ SUCCESS! CAPTURED MP4:", finalMp4Link);
+            return { success: true, direct_url: finalMp4Link };
         } else {
-            // බැරිම වුණොත් බටන් එකේ href එක හරි ගමු
-            const fallback = await finalPage.evaluate(() => {
-                const a = document.querySelector('#dl-links a');
+            // බටන් එකේ href එක කෙලින්ම අරන් බලමු (බැරිම වුණොත්)
+            const href = await finalPage.evaluate(() => {
+                const a = Array.from(document.querySelectorAll('a')).find(b => b.innerText.toLowerCase().includes('direct download'));
                 return a ? a.href : null;
             });
-            if (fallback) return { success: true, direct_url: fallback };
-            throw new Error("Failed to capture MP4 link");
+            if (href && (href.includes('.mp4') || href.includes('server'))) return { success: true, direct_url: href };
+            throw new Error("Final MP4 link capture failed.");
         }
 
     } catch (e) {
