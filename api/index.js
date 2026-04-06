@@ -314,104 +314,97 @@ async function getDirectAnimeLink(animeUrl, episodeNum) {
 
 //---------CINESUBZ--------
 
-async function getCinesubzDirect(internalUrl) {
+app.get('/api/cinesubz/get-sonic', async (req, res) => {
+    const internalUrl = req.query.url;
     let browser;
     try {
-        console.log("------------------------------------");
-        console.log("🚀 STABLE DEBUG SNIPER STARTING...");
         browser = await puppeteer.launch({
             executablePath: HEROKU_CHROME_PATH,
             headless: true,
-            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+            args: ['--no-sandbox', '--disable-setuid-sandbox']
         });
-
-        let finalMp4Link = null;
-
-        // 🔥 Safe Sniffer Function
-        const attachSniffer = async (p) => {
-            await p.setRequestInterception(true);
-            p.on('request', (req) => {
-                const url = req.url();
-                
-                // 🛑 වැදගත්: හැම ලින්ක් එකක්ම ලොග් කරනවා (Headers/Ads අයින් කරලා)
-                if (!url.startsWith('data:') && !url.includes('google') && !url.includes('analytics')) {
-                    console.log(`[NET] ${req.method()}: ${url.substring(0, 100)}`);
-                }
-
-                if (url.includes('.mp4') || url.includes('sume321.online') || url.includes('bot45')) {
-                    finalMp4Link = url;
-                    console.log("🎯 >>> FOUND TARGET URL:", url);
-                }
-
-                // Crash වීම වැළැක්වීමට safe handling
-                if (req.isInterceptResolutionHandled()) return;
-                
-                if (['image', 'font'].includes(req.resourceType())) {
-                    req.abort().catch(() => {});
-                } else {
-                    req.continue().catch(() => {});
-                }
-            });
-        };
-
-        // අලුතින් ඇරෙන Tabs වලටත් Sniffer එක දානවා
-        browser.on('targetcreated', async (target) => {
-            if (target.type() === 'page') {
-                const newP = await target.page();
-                if (newP) await attachSniffer(newP);
-            }
-        });
-
         const page = await browser.newPage();
-        await attachSniffer(page);
-        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36');
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
 
-        // Step 1: Loading
-        console.log("LOG: Navigating to Cinesubz...");
-        await page.goto(internalUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
-        await new Promise(r => setTimeout(r, 5000));
+        console.log("LOG: Loading Cinesubz Step 1...");
+        await page.goto(internalUrl, { waitUntil: 'domcontentloaded' });
+        await new Promise(r => setTimeout(r, 6000)); // Countdown එකට වෙලාව දෙනවා
 
-        // Step 2: Click
-        console.log("LOG: Clicking 'Go to Download Page'...");
+        let sonicUrl = null;
+        // අලුත් ටැබ් එක අල්ලගන්න Listener එක
+        const targetPromise = new Promise(resolve => browser.once('targetcreated', t => resolve(t.page())));
+
         await page.evaluate(() => {
-            const btn = document.querySelector('#link') || document.querySelector('.wait-done a');
+            const btn = document.querySelector('#link');
             if (btn) btn.click();
         });
 
-        // Step 3: Monitor All Tabs for Direct Download Button
-        console.log("LOG: Monitoring tabs for 'Direct Download' button...");
-        for (let i = 0; i < 15; i++) {
-            if (finalMp4Link) break;
-
-            const pages = await browser.pages();
-            for (const p of pages) {
-                const pUrl = p.url();
-                if (pUrl.includes('sonic-cloud.online')) {
-                    await p.evaluate(() => {
-                        const btn = Array.from(document.querySelectorAll('a, button'))
-                                         .find(b => b.innerText.toLowerCase().includes('direct download'));
-                        if (btn) btn.click();
-                    }).catch(() => {});
-                }
-            }
-            await new Promise(r => setTimeout(r, 1000));
+        const newTab = await targetPromise;
+        if (newTab) {
+            sonicUrl = newTab.url();
         }
 
-        if (finalMp4Link) {
-            console.log("✅ FINAL SUCCESS URL:", finalMp4Link);
-            return { success: true, direct_url: finalMp4Link };
+        if (sonicUrl) {
+            res.json({ success: true, sonic_url: sonicUrl });
         } else {
-            console.log("❌ Failed to capture MP4 from network.");
-            return { success: false, error: "Link capture failed." };
+            res.json({ success: false, error: "Could not capture Sonic URL" });
         }
-
     } catch (e) {
-        console.error("❌ MASTER ERROR:", e.message);
-        return { success: false, error: e.message };
+        res.json({ success: false, error: e.message });
     } finally {
         if (browser) await browser.close();
     }
-}
+});
+
+app.get('/api/cinesubz/get-mp4', async (req, res) => {
+    const sonicUrl = req.query.url;
+    let browser;
+    try {
+        browser = await puppeteer.launch({
+            executablePath: HEROKU_CHROME_PATH, headless: true,
+            args: ['--no-sandbox']
+        });
+        const page = await browser.newPage();
+        let finalMp4 = null;
+
+        await page.setRequestInterception(true);
+        page.on('request', (req) => {
+            const url = req.url();
+            // .mp4 හෝ sume321 domain එක අල්ලනවා
+            if (url.includes('.mp4') || url.includes('sume321.online') || url.includes('bot45')) {
+                finalMp4 = url;
+            }
+            req.continue();
+        });
+
+        console.log("LOG: Loading Sonic Page Step 2...");
+        await page.goto(sonicUrl, { waitUntil: 'domcontentloaded' });
+        await new Promise(r => setTimeout(r, 5000)); // බටන් එක ලෝඩ් වෙන්න වෙලාව
+
+        // Direct Download බටන් එක ඔබනවා
+        await page.evaluate(() => {
+            const btn = Array.from(document.querySelectorAll('a, button'))
+                             .find(b => b.innerText.toLowerCase().includes('direct download'));
+            if (btn) btn.click();
+        });
+
+        // ලින්ක් එක අහුවෙනකම් තත්පර 8ක් බලන් ඉන්නවා
+        for (let i = 0; i < 16; i++) {
+            if (finalMp4) break;
+            await new Promise(r => setTimeout(r, 500));
+        }
+
+        if (finalMp4) {
+            res.json({ success: true, mp4_url: finalMp4 });
+        } else {
+            res.json({ success: false, error: "MP4 not found" });
+        }
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    } finally {
+        if (browser) await browser.close();
+    }
+});
 
 async function searchCinesubz(query) {
     try {
