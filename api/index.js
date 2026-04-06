@@ -317,7 +317,6 @@ async function getDirectAnimeLink(animeUrl, episodeNum) {
 async function getCinesubzDirect(internalUrl) {
     let browser;
     try {
-        console.log("🚀 Ultra Sniper Mode Engaged...");
         browser = await puppeteer.launch({
             executablePath: HEROKU_CHROME_PATH,
             headless: true,
@@ -325,85 +324,73 @@ async function getCinesubzDirect(internalUrl) {
         });
 
         const page = await browser.newPage();
+        
+        // 🚀 Speed Hack: පින්තූර සහ අනවශ්‍ය දේවල් ලෝඩ් වීම නවත්වනවා
+        await page.setRequestInterception(true);
+        page.on('request', (req) => {
+            const resource = req.resourceType();
+            if (resource === 'image' || resource === 'stylesheet' || resource === 'font') {
+                req.abort();
+            } else {
+                req.continue();
+            }
+        });
+
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36');
 
         let directDownloadUrl = null;
 
-        // --- පියවර 1: පළවෙනි පේජ් එක (Cinesubz) ---
+        // Step 1: මුල් පේජ් එකට යනවා
         await page.goto(internalUrl, { waitUntil: 'domcontentloaded' });
-        console.log("Step 1: Clicking Go to Download Page...");
-        await new Promise(r => setTimeout(r, 6000)); // Countdown එක ඉවර වෙනකම්
+        // තත්පර 4ක් ඉමු (3s countdown + 1s safe margin)
+        await new Promise(r => setTimeout(r, 4500));
 
-        // පේජ් එකේ තියෙන #link බටන් එක ඔබනවා (Ads එක්ක එන නිසා loop එකක් පාවිච්චි කරනවා)
         let downloadPage = null;
-        for (let i = 0; i < 5; i++) {
+        // බටන් එක ඔබනවා (Ad bypass කරන්න 3 පාරක් උත්සාහ කරනවා)
+        for (let i = 0; i < 3; i++) {
             await page.evaluate(() => {
                 const btn = document.querySelector('#link');
                 if (btn) btn.click();
             });
-            await new Promise(r => setTimeout(r, 3000));
-            
+            await new Promise(r => setTimeout(r, 2000));
             const pages = await browser.pages();
             downloadPage = pages.find(p => p.url().includes('sonic-cloud.online'));
             if (downloadPage) break;
-            
-            // Ad tabs වහනවා
-            for (const p of pages) {
-                if (p !== page && !p.url().includes('sonic-cloud.online')) await p.close().catch(() => {});
-            }
-            await page.bringToFront();
         }
 
-        if (!downloadPage) throw new Error("Could not reach the sonic-cloud page.");
+        if (!downloadPage) throw new Error("Sonic-cloud not reached");
 
-        // --- පියවර 2: Sonic-Cloud පේජ් එක (දැන් එවපු HTML එක තියෙන්නේ මෙතන) ---
-        console.log("Step 2: Processing Sonic-Cloud Page...");
+        // Step 2: Sonic-cloud පේජ් එකේ වැඩේ (මේක ගොඩක් වේගයෙන් කරන්න ඕනේ)
         await downloadPage.bringToFront();
-
-        // Download ලින්ක් එක capture කරන්න ලෑස්ති වෙනවා
-        await downloadPage.setRequestInterception(true);
-        downloadPage.on('request', (request) => {
-            const url = request.url();
+        
+        // ලින්ක් එක capture කරන්න listener එකක් දානවා
+        downloadPage.on('request', (req) => {
+            const url = req.url();
             if (url.includes('.mp4') || (url.includes('server') && url.includes('download'))) {
                 directDownloadUrl = url;
             }
-            request.continue();
         });
 
-        // 1. Loading screen එක අයින් වෙනකම් සහ බටන් එක එනකම් ඉන්නවා
-        console.log("Waiting for Download buttons to load...");
-        await downloadPage.waitForSelector('#dl-links a', { timeout: 20000 }).catch(() => {});
-
-        // 2. බටන් එක ක්ලික් කරනවා
-        // ඔයා එවපු HTML එකේ බටන් එක වැටෙන්නේ #dl-links ඇතුළේ <a> ටැග් එකක් විදිහට.
-        await downloadPage.evaluate(() => {
-            const links = Array.from(document.querySelectorAll('#dl-links a'));
-            // "Direct Download (New)" හෝ "Download" තියෙන බටන් එක බලනවා
-            const target = links.find(l => l.innerText.toLowerCase().includes('download'));
-            if (target) target.click();
-        });
-
-        // ලින්ක් එක අහුවෙනකම් තත්පර 10ක් බලන් ඉන්නවා
-        for (let i = 0; i < 10; i++) {
-            if (directDownloadUrl) break;
+        // බටන් එක එනකම් තත්පර 8ක් පුරා චෙක් කරනවා (තත්පර 20ක් බලන් ඉන්නේ නැතුව)
+        for (let i = 0; i < 8; i++) {
+            const captured = await downloadPage.evaluate(() => {
+                const btn = document.querySelector('#dl-links a');
+                if (btn) {
+                    btn.click();
+                    return btn.href;
+                }
+                return null;
+            });
+            
+            if (captured || directDownloadUrl) {
+                return { success: true, direct_url: directDownloadUrl || captured };
+            }
             await new Promise(r => setTimeout(r, 1000));
         }
 
-        if (directDownloadUrl) {
-            console.log("✅ Success! Captured:", directDownloadUrl);
-            return { success: true, direct_url: directDownloadUrl };
-        } else {
-            // බැරිම වුණොත් තියෙන පළවෙනි ඩවුන්ලෝඩ් ලින්ක් එක හරි ගන්නවා
-            const fallback = await downloadPage.evaluate(() => {
-                const a = document.querySelector('#dl-links a');
-                return a ? a.href : null;
-            });
-            if (fallback) return { success: true, direct_url: fallback };
-            throw new Error("Could not capture the final direct link.");
-        }
+        throw new Error("Timeout on final page");
 
     } catch (e) {
-        console.error("Sniper Error:", e.message);
         return { success: false, error: e.message };
     } finally {
         if (browser) await browser.close();
