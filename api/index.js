@@ -443,6 +443,38 @@ app.get('/api/cinesubz/get-mp4', async (req, res) => {
         if (browser) await browser.close();
     }
 });
+
+app.get('/api/debug-source', async (req, res) => {
+    const targetUrl = req.query.url;
+    if (!targetUrl) return res.send("URL එකක් එවන්න මචං!");
+
+    let browser;
+    try {
+        browser = await puppeteer.launch({
+            executablePath: HEROKU_CHROME_PATH,
+            headless: true,
+            args: ['--no-sandbox', '--disable-setuid-sandbox']
+        });
+
+        const page = await browser.newPage();
+        
+        // 1. පේජ් එකට යනවා
+        await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 60000 });
+
+        // 2. JavaScript රන් වුණාට පස්සේ තියෙන HTML එක ගන්නවා
+        const renderedHTML = await page.content();
+
+        // 3. මේක Plain Text විදිහට බ්‍රවුසර් එකට යවනවා
+        res.setHeader('Content-Type', 'text/plain');
+        res.send(renderedHTML);
+
+    } catch (e) {
+        res.send("Error: " + e.message);
+    } finally {
+        if (browser) await browser.close();
+    }
+});
+
 async function searchCinesubz(query) {
     try {
         const searchUrl = `${CINESUBZ_BASE}/?s=${encodeURIComponent(query)}`;
