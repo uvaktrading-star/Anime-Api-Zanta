@@ -357,106 +357,54 @@ app.get('/api/cinesubz/get-sonic', async (req, res) => {
 });
 
 app.get('/api/cinesubz/get-mp4', async (req, res) => {
-    const sonicUrl = req.query.url;
+    const sonicUrl = req.query.url; 
     if (!sonicUrl) return res.json({ success: false, error: "URL is required" });
 
-    let browser;
     try {
-        browser = await puppeteer.launch({
-            executablePath: HEROKU_CHROME_PATH,
-            headless: true,
-            args: [
-                '--no-sandbox', 
-                '--disable-setuid-sandbox',
-                '--disable-web-security', // Security constraints අයින් කරනවා ලින්ක් එක අල්ලන්න ලේසි වෙන්න
-                '--disable-features=IsolateOrigins,site-per-process'
-            ]
-        });
+        console.log("LOG: Sniping Direct Link via POST...");
 
-        const page = await browser.newPage();
-        let allCapturedLinks = [];
-
-        // 1. Network Sniffer එක Active කරනවා
-        await page.setRequestInterception(true);
-        page.on('request', request => {
-            const url = request.url();
-            if (!url.includes('google') && !url.includes('analytics')) {
-                allCapturedLinks.push({ type: 'REQ', method: request.method(), url: url });
+        // 1. අපි කෙලින්ම සයිට් එකට කියනවා අපිට Download එක ඕනේ කියලා POST එකක් යවලා
+        const response = await axios.post(sonicUrl, 
+            "download=true", // මේක තමයි බටන් එක එබුවම යන Data එක
+            {
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+                    'Referer': sonicUrl,
+                    'Origin': 'https://bot3.sonic-cloud.online'
+                },
+                maxRedirects: 0, // Redirect එක auto වෙන්න දෙන්නේ නැහැ, අපිට ඒ ලින්ක් එක අල්ලගන්න ඕන නිසා
+                validateStatus: (status) => status >= 200 && status < 400 
             }
-            request.continue();
-        });
+        );
 
-        page.on('response', response => {
-            const url = response.url();
-            const status = response.status();
-            const headers = response.headers();
-            
-            // Redirects අල්ලගන්නවා
-            if (status >= 300 && status <= 399) {
-                allCapturedLinks.push({ type: 'REDIRECT', status, url, location: headers['location'] });
-            }
-            
-            // Target එක Match වෙනවද බලනවා
-            if (url.includes('.mp4') || url.includes('sume321') || url.includes('bot45')) {
-                allCapturedLinks.push({ type: 'TARGET_MATCH', url: url });
-            }
-        });
+        // 2. Redirect URL එක අල්ලගන්නවා (302 Found)
+        let directLink = response.headers['location'];
 
-        console.log("LOG: Step 2 - Opening Sonic Cloud...");
-        await page.goto(sonicUrl, { waitUntil: 'networkidle2', timeout: 60000 });
-        
-        // පේජ් එක ලෝඩ් වුණාම පොඩි වෙලාවක් ඉමු
-        await new Promise(r => setTimeout(r, 4000));
+        // 3. සමහර වෙලාවට ලින්ක් එක බොඩි එකේ තියෙන්න පුළුවන් (Fallback)
+        if (!directLink && response.data) {
+            const match = response.data.match(/https?:\/\/[^\s"'<>]+sume321\.online[^\s"'<>]*/);
+            if (match) directLink = match[0];
+        }
 
-        console.log("LOG: Finding and Clicking Button via Coordinates...");
-        
-        // 2. බටන් එක තියෙන තැන (Coordinates) හරියටම අල්ලගන්නවා
-        const buttonInfo = await page.evaluate(() => {
-            const btn = Array.from(document.querySelectorAll('a, button, div, span'))
-                             .find(b => b.innerText && b.innerText.toLowerCase().includes('direct download'));
-            
-            if (btn) {
-                const rect = btn.getBoundingClientRect();
-                return { x: rect.left, y: rect.top, width: rect.width, height: rect.height, found: true };
-            }
-            return { found: false };
-        });
-
-        if (buttonInfo.found) {
-            // Mouse එක බටන් එක මැදට අරන් ගිහින් ක්ලික් කරනවා
-            const centerX = buttonInfo.x + buttonInfo.width / 2;
-            const centerY = buttonInfo.y + buttonInfo.height / 2;
-            
-            await page.mouse.click(centerX, centerY);
-            console.log(`LOG: Aggressive Click performed at ${centerX}, ${centerY}`);
+        if (directLink) {
+            console.log("✅ SUCCESS! Captured Direct Link:", directLink);
+            res.json({ success: true, mp4_url: directLink });
         } else {
-            // බටන් එක අහුවුනේ නැත්නම් සාමාන්‍ය විදිහට හරි ඔබන්න බලනවා
-            await page.evaluate(() => {
-                const btn = Array.from(document.querySelectorAll('a, button'))
-                                 .find(b => b.innerText.toLowerCase().includes('direct download'));
-                if (btn) btn.click();
+            // මේකත් බැරි වුණොත් මචං පේජ් එකේ Source එකේ හැංගිලා තියෙනවද බලමු
+            res.json({ 
+                success: false, 
+                error: "Direct link not found in headers.",
+                debug_info: "Try to check if the file is still available on server."
             });
         }
 
-        // 3. බටන් එක එබුවට පස්සේ Network එකේ වෙන දේ බලන්න තත්පර 12ක් ඉන්නවා
-        console.log("LOG: Waiting for network triggers...");
-        await new Promise(r => setTimeout(r, 12000));
-
-        // 4. අහුවුණ සේරම ලින්ක්ස් වලින් Target එක Filter කරමු
-        const target = allCapturedLinks.find(l => l.url.includes('sume321.online') || l.url.includes('.mp4'));
-
-        res.json({
-            success: true,
-            direct_link: target ? target.url : null,
-            captured_count: allCapturedLinks.length,
-            links: allCapturedLinks // මොනවා හරි අවුලක් වුනොත් බලන්න ඔක්කොම යවනවා
-        });
-
     } catch (e) {
-        console.error("❌ ERROR:", e.message);
+        // Axios 302 එකක් ආවම Error එකක් විදිහට සලකන්න පුළුවන්, ඒකයි මෙතනත් චෙක් කරන්නේ
+        if (e.response && e.response.headers && e.response.headers.location) {
+            return res.json({ success: true, mp4_url: e.response.headers.location });
+        }
         res.json({ success: false, error: e.message });
-    } finally {
-        if (browser) await browser.close();
     }
 });
 
