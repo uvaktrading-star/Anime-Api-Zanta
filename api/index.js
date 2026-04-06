@@ -363,60 +363,78 @@ async function getCartoonDownload(cartoonUrl) {
         });
 
         const page = await browser.newPage();
-        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36');
+        
+        // Timeout එක 30s වලට අඩුවෙන් තියාගන්න (Heroku H12 Error එක නවත්තන්න)
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 28000); 
 
         let capturedUrl = null;
 
-        // 🎯 NETWORK LISTENER: ඕනෑම .mp4 හෝ files.cartoons.lk ලින්ක් එකක් එනකම් බලා ඉන්නවා
+        // 🎯 NETWORK LISTENER
         page.on('request', request => {
             const url = request.url();
-            // මෙතන තමයි සයිට් එකේ ඩිරෙක්ට් ෆයිල් සර්වර් එකේ නම දාන්නේ
+            // .mp4 හෝ files.cartoons.lk ලින්ක් එකක් ආවොත් එවලෙම අල්ලනවා
             if (url.includes('.mp4') || url.includes('files.cartoons.lk')) {
                 capturedUrl = url;
             }
         });
 
-        // 🛡️ AD-TAB CLOSER: ඇඩ්ස් ටැබ් එකක් ඇරිච්ච ගමන් වහනවා
+        // 🛡️ IMPROVED AD-TAB CLOSER
         browser.on('targetcreated', async (target) => {
-            const adPage = await target.page();
-            if (adPage && !adPage.url().includes('cartoons.lk')) {
-                await adPage.close().catch(() => {});
-                await page.bringToFront();
+            if (target.type() === 'page') {
+                const newPage = await target.page();
+                if (newPage) {
+                    const url = newPage.url();
+                    // cartoons.lk නොවන ඕනෑම එකක් ඇඩ් එකක් ලෙස සලකා වසනවා
+                    if (!url.includes('cartoons.lk')) {
+                        await newPage.close().catch(() => {});
+                        // මුල් පිටුවට focus එක දෙනවා ඊළඟ click එකට
+                        await page.bringToFront().catch(() => {});
+                    }
+                }
             }
         });
 
-        await page.goto(cartoonUrl, { waitUntil: 'domcontentloaded' });
+        await page.goto(cartoonUrl, { waitUntil: 'domcontentloaded', timeout: 25000 });
 
         const btnSelector = 'button.direct-download-btn';
-        await page.waitForSelector(btnSelector);
+        await page.waitForSelector(btnSelector, { timeout: 10000 });
 
-        // 🔄 CLICKING LOOP: ලින්ක් එක අහුවෙනකම් බටන් එක ඔබනවා
         console.log("🚀 Sniping started...");
         
-        for (let i = 0; i < 10; i++) {
-            if (capturedUrl) break; // ලින්ක් එක අහුවුණ ගමන් ලූප් එක නවත්වනවා
+        // ලින්ක් එක ලැබෙනකම් විතරක් Loop එක රන් කරනවා
+        for (let i = 0; i < 6; i++) { 
+            if (capturedUrl) break;
 
+            // පේජ් එක ඇතුළේ Click එක කරනවා
             await page.evaluate((sel) => {
                 const btn = document.querySelector(sel);
                 if (btn) btn.click();
             }, btnSelector);
 
-            // ක්ලික් එකකට පස්සේ ඇඩ් එකක් ආවොත් ඒක වහන්නයි, 
-            // Processing එක වෙන්නයි පොඩි වෙලාවක් (2s) දෙනවා
-            await new Promise(r => setTimeout(r, 2000));
+            // ක්ලික් එකෙන් පස්සේ ඇඩ් එකක් ආවා නම් ඒක අයින් වෙන්න තත්පර 1.5ක් දෙනවා
+            await new Promise(r => setTimeout(r, 1500));
             
+            // ලින්ක් එක අහුවුණාද කියලා හැම තිස්සෙම චෙක් කරනවා
+            if (capturedUrl) break;
+
+            // දෙවැනි ක්ලික් එකේදී තමයි ගොඩක් වෙලාවට Processing පටන් ගන්නේ
+            // ඒ නිසා තව තත්පර 2ක් ඉඳලා බලනවා (Total 3.5s per loop)
+            await new Promise(r => setTimeout(r, 2000));
             if (capturedUrl) break;
         }
 
-        // ⏳ ලින්ක් එක අහුවුණාට පස්සෙත් රික්වෙස්ට් එක සම්පූර්ණ වෙන්න තව පොඩ්ඩක් ඉන්නවා
+        clearTimeout(timeoutId);
+
         if (capturedUrl) {
-            console.log("🎯 Link Captured Successfully!");
+            console.log("🎯 Success:", capturedUrl);
             return { success: true, download_url: capturedUrl };
         } else {
-            return { success: false, error: "Link capture failed after multiple attempts." };
+            return { success: false, error: "Link capture failed. Try again." };
         }
 
     } catch (e) {
+        console.error("Puppeteer Error:", e.message);
         return { success: false, error: e.message };
     } finally {
         if (browser) await browser.close();
