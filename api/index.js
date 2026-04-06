@@ -317,7 +317,7 @@ async function getDirectAnimeLink(animeUrl, episodeNum) {
 async function getCinesubzDirect(internalUrl) {
     let browser;
     try {
-        console.log("🚀 Advanced Sniping Started...");
+        console.log("🚀 Ultra Sniper Mode Engaged...");
         browser = await puppeteer.launch({
             executablePath: HEROKU_CHROME_PATH,
             headless: true,
@@ -325,73 +325,88 @@ async function getCinesubzDirect(internalUrl) {
         });
 
         const page = await browser.newPage();
-        // Browser එකට real user කෙනෙක් වගේ පේන්න පාවිච්චි කරනවා
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36');
 
         let directDownloadUrl = null;
 
-        // 1. Link Capture Logic (Network monitoring)
-        await page.setRequestInterception(true);
-        page.on('request', (request) => {
+        // 1. මුල් පේජ් එක load කරනවා
+        await page.goto(internalUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+        console.log("Step 1: Waiting for 3s countdown...");
+        await new Promise(r => setTimeout(r, 6000)); // Countdown එකට අමතර කාලයක්
+
+        // 2. "Go to Download Page" එබීම සහ New Tabs හැසිරවීම
+        console.log("Step 2: Trying to reach download page...");
+        
+        let downloadPage = null;
+
+        // බටන් එක වතාවක් නෙමෙයි 5 වතාවක් විතර ඔබලා බලමු (Ads bypass කරන්න)
+        for (let i = 0; i < 5; i++) {
+            // "Go to Download Page" බටන් එක ඔබනවා
+            await page.evaluate(() => {
+                const btn = document.querySelector('#link') || document.querySelector('.wait-done a');
+                if (btn) btn.click();
+            });
+
+            await new Promise(r => setTimeout(r, 3000)); // Tab එක ඇරෙනකම් ඉන්නවා
+
+            // දැනට ඇරිලා තියෙන හැම tab එකක්ම පරීක්ෂා කරනවා
+            const pages = await browser.pages();
+            for (const p of pages) {
+                const url = p.url();
+                if (url.includes('sonic-cloud.online')) {
+                    downloadPage = p;
+                    console.log("🎯 Download page detected!");
+                    break;
+                } else if (p !== page) {
+                    // Ad එකක් නම් ඒ tab එක වහනවා
+                    await p.close().catch(() => {});
+                }
+            }
+            if (downloadPage) break;
+            await page.bringToFront(); // ආයෙත් මුල් පේජ් එකට ඇවිත් click කරන්න ලෑස්ති වෙනවා
+        }
+
+        if (!downloadPage) throw new Error("Could not reach the download page after multiple attempts.");
+
+        // 3. Download Page එකේ "Direct Download (New)" බටන් එක එබීම
+        console.log("Step 3: Clicking 'Direct Download (New)'...");
+        await downloadPage.bringToFront();
+        await downloadPage.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36');
+
+        // මෙතනදීත් Ads එන්න පුළුවන් නිසා Request Interception පාවිච්චි කරනවා
+        await downloadPage.setRequestInterception(true);
+        downloadPage.on('request', (request) => {
             const url = request.url();
-            // .mp4 හෝ sonic-cloud වගේ domain එකක download ලින්ක් එකක් ගියොත් capture කරනවා
-            if (url.includes('.mp4') || url.includes('bot3.sonic-cloud') || (url.includes('server') && url.includes('download'))) {
+            if (url.includes('.mp4') || url.includes('server') && url.includes('download')) {
                 directDownloadUrl = url;
             }
-            
-            // Ads block කරනවා speed එක වැඩි කරන්න
-            if (url.includes('googleads') || url.includes('popads') || url.includes('adskeeper')) {
-                request.abort();
-            } else {
-                request.continue();
-            }
+            request.continue();
         });
 
-        // 2. Load Internal Page
-        console.log("Step 1: Loading Internal Page...");
-        await page.goto(internalUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
-        
-        // Countdown එක ඉවර වෙනකම් තත්පර 6ක් ඉමු
-        await new Promise(r => setTimeout(r, 6500));
-
-        // 3. Click "Go to Download Page"
-        console.log("Step 2: Triggering 'Go to Download Page'...");
-        await page.evaluate(() => {
+        // බටන් එක ඔබනවා (image_8af54e.jpg එකේ විදියට text එක බලලා)
+        await downloadPage.evaluate(() => {
             const btns = Array.from(document.querySelectorAll('a, button'));
-            const target = btns.find(b => b.innerText.toLowerCase().includes('go to download page'));
+            const target = btns.find(b => b.innerText.toLowerCase().includes('direct download (new)'));
             if (target) target.click();
         });
 
-        // අලුත් පේජ් එකට යනකම් තත්පර 5ක් ඉමු
-        await new Promise(r => setTimeout(r, 5000));
-
-        // 4. Click "Direct Download (New)"
-        console.log("Step 3: Triggering 'Direct Download'...");
-        // මෙතනදී සමහරවිට බටන් එක වැටෙන්න තව පොඩි වෙලාවක් යනවා
-        await page.evaluate(() => {
-            const btns = Array.from(document.querySelectorAll('a, button'));
-            const target = btns.find(b => b.innerText.toLowerCase().includes('direct download'));
-            if (target) target.click();
-        });
-
-        // ලින්ක් එක capture වෙනකම් තව ටිකක් ඉමු
+        // අන්තිම ලින්ක් එක අහුවෙනකම් තත්පර 10ක් බලන් ඉන්නවා
         for (let i = 0; i < 10; i++) {
             if (directDownloadUrl) break;
             await new Promise(r => setTimeout(r, 1000));
         }
 
         if (directDownloadUrl) {
-            console.log("🎯 Success:", directDownloadUrl);
+            console.log("✅ Success! Captured:", directDownloadUrl);
             return { success: true, direct_url: directDownloadUrl };
         } else {
-            // අන්තිමට බටන් එකේ href එකම අරන් බලමු
-            const finalHref = await page.evaluate(() => {
-                const btns = Array.from(document.querySelectorAll('a'));
-                const target = btns.find(b => b.innerText.toLowerCase().includes('direct download'));
+            // බටන් එකේ href එක හරි අරන් දෙමු
+            const finalHref = await downloadPage.evaluate(() => {
+                const target = Array.from(document.querySelectorAll('a')).find(b => b.innerText.toLowerCase().includes('direct download (new)'));
                 return target ? target.href : null;
             });
             if (finalHref) return { success: true, direct_url: finalHref };
-            throw new Error("Could not capture direct download link.");
+            throw new Error("Final download link could not be captured.");
         }
 
     } catch (e) {
