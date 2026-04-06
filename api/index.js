@@ -318,7 +318,7 @@ async function getCinesubzDirect(internalUrl) {
     let browser;
     try {
         console.log("------------------------------------");
-        console.log("🚀 DEBUG SNIPER STARTING...");
+        console.log("🚀 STABLE DEBUG SNIPER STARTING...");
         browser = await puppeteer.launch({
             executablePath: HEROKU_CHROME_PATH,
             headless: true,
@@ -327,34 +327,38 @@ async function getCinesubzDirect(internalUrl) {
 
         let finalMp4Link = null;
 
-        // 🔥 හැම පේජ් එකකටම (Tabs) Network Sniffer එකක් දාන Function එක
+        // 🔥 Safe Sniffer Function
         const attachSniffer = async (p) => {
             await p.setRequestInterception(true);
             p.on('request', (req) => {
                 const url = req.url();
-                const method = req.method();
                 
-                // හැම ලින්ක් එකක්ම ලොග් කරනවා (ගොඩක් එන නිසා වැදගත් ටික විතරක්)
-                if (!url.includes('google') && !url.includes('analytics') && !url.includes('adserver')) {
-                    console.log(`[NETWORK] ${method}: ${url.substring(0, 80)}...`);
+                // 🛑 වැදගත්: හැම ලින්ක් එකක්ම ලොග් කරනවා (Headers/Ads අයින් කරලා)
+                if (!url.startsWith('data:') && !url.includes('google') && !url.includes('analytics')) {
+                    console.log(`[NET] ${req.method()}: ${url.substring(0, 100)}`);
                 }
 
                 if (url.includes('.mp4') || url.includes('sume321.online') || url.includes('bot45')) {
                     finalMp4Link = url;
-                    console.log("🎯 >>> TARGET FOUND: ", url);
+                    console.log("🎯 >>> FOUND TARGET URL:", url);
                 }
 
-                if (['image', 'font'].includes(req.resourceType())) req.abort();
-                else req.continue();
+                // Crash වීම වැළැක්වීමට safe handling
+                if (req.isInterceptResolutionHandled()) return;
+                
+                if (['image', 'font'].includes(req.resourceType())) {
+                    req.abort().catch(() => {});
+                } else {
+                    req.continue().catch(() => {});
+                }
             });
         };
 
-        // අලුතින් ඇරෙන හැම Tab එකකටම ඉබේම Sniffer එක සම්බන්ධ කරනවා
+        // අලුතින් ඇරෙන Tabs වලටත් Sniffer එක දානවා
         browser.on('targetcreated', async (target) => {
             if (target.type() === 'page') {
                 const newP = await target.page();
-                console.log("📂 New Tab Detected:", newP.url().substring(0, 50));
-                await attachSniffer(newP);
+                if (newP) await attachSniffer(newP);
             }
         });
 
@@ -362,34 +366,31 @@ async function getCinesubzDirect(internalUrl) {
         await attachSniffer(page);
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36');
 
-        // Step 1: Loading Initial Page
-        console.log("LOG: Loading Cinesubz...");
-        await page.goto(internalUrl, { waitUntil: 'domcontentloaded' });
+        // Step 1: Loading
+        console.log("LOG: Navigating to Cinesubz...");
+        await page.goto(internalUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
         await new Promise(r => setTimeout(r, 5000));
 
-        // Step 2: Click Go to Download
+        // Step 2: Click
         console.log("LOG: Clicking 'Go to Download Page'...");
         await page.evaluate(() => {
             const btn = document.querySelector('#link') || document.querySelector('.wait-done a');
             if (btn) btn.click();
         });
 
-        // Step 3: Sonic-Cloud Page එකේ බටන් එක ඔබන්න බලමු
-        // අපි තත්පර 15ක් පුරා බ්‍රවුසර් එකේ ඇරිලා තියෙන හැම පේජ් එකකම බටන් එක හොයනවා
-        console.log("LOG: Searching for 'Direct Download' button in all tabs...");
+        // Step 3: Monitor All Tabs for Direct Download Button
+        console.log("LOG: Monitoring tabs for 'Direct Download' button...");
         for (let i = 0; i < 15; i++) {
             if (finalMp4Link) break;
 
             const pages = await browser.pages();
             for (const p of pages) {
-                if (p.url().includes('sonic-cloud.online')) {
+                const pUrl = p.url();
+                if (pUrl.includes('sonic-cloud.online')) {
                     await p.evaluate(() => {
                         const btn = Array.from(document.querySelectorAll('a, button'))
                                          .find(b => b.innerText.toLowerCase().includes('direct download'));
-                        if (btn) {
-                            console.log("Button Found and Clicking...");
-                            btn.click();
-                        }
+                        if (btn) btn.click();
                     }).catch(() => {});
                 }
             }
@@ -397,14 +398,15 @@ async function getCinesubzDirect(internalUrl) {
         }
 
         if (finalMp4Link) {
-            console.log("✅ FINAL SUCCESS:", finalMp4Link);
+            console.log("✅ FINAL SUCCESS URL:", finalMp4Link);
             return { success: true, direct_url: finalMp4Link };
         } else {
-            throw new Error("Final MP4 link not found in any tab's network traffic.");
+            console.log("❌ Failed to capture MP4 from network.");
+            return { success: false, error: "Link capture failed." };
         }
 
     } catch (e) {
-        console.error("❌ ERROR:", e.message);
+        console.error("❌ MASTER ERROR:", e.message);
         return { success: false, error: e.message };
     } finally {
         if (browser) await browser.close();
