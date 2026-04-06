@@ -353,7 +353,7 @@ async function searchCartoons(query) {
     }
 }
 
-async function getCartoonDownload(cartoonUrl) {
+async function getCartoonDownload(cartoonUrl, epNum = null) {
     let browser;
     try {
         browser = await puppeteer.launch({
@@ -374,9 +374,7 @@ async function getCartoonDownload(cartoonUrl) {
                 const status = response.status();
                 if (status >= 300 && status <= 308) {
                     const headers = response.headers();
-                    if (headers['location']) {
-                        capturedUrl = headers['location'];
-                    }
+                    if (headers['location']) capturedUrl = headers['location'];
                 }
             }
             if (url.includes('.mp4') || url.includes('files.cartoons.lk')) {
@@ -396,59 +394,103 @@ async function getCartoonDownload(cartoonUrl) {
 
         // --- 1. බලනවා මේකේ තියෙන්නේ Episode List එකක්ද කියලා ---
         const isSeries = await page.evaluate(() => {
-            const btn = Array.from(document.querySelectorAll('button, a')).find(b => 
-                b.innerText.toLowerCase().includes('select episode')
+            const btn = Array.from(document.querySelectorAll('button, span')).find(el => 
+                el.innerText.toLowerCase().includes('select episode')
             );
             return !!btn;
         });
 
-        if (isSeries) {
-            console.log("📺 Series detected. Extracting episodes...");
-            // Select Episode button එක ඔබනවා
+        if (isSeries && !epNum) {
+            console.log("📺 Series detected. Extracting episode list...");
+            
+            // Popup එක ඇරගන්නවා
             await page.evaluate(() => {
-                const btn = Array.from(document.querySelectorAll('button, a')).find(b => 
+                const btn = Array.from(document.querySelectorAll('button')).find(b => 
                     b.innerText.toLowerCase().includes('select episode')
                 );
                 if (btn) btn.click();
             });
 
-            // Episode List එක එනකම් පොඩ්ඩක් ඉන්නවා
-            await new Promise(r => setTimeout(r, 2000));
+            await page.waitForSelector('.episode-popup-item', { timeout: 10000 });
 
+            // එපිසෝඩ් ලිස්ට් එක හරියටම ගන්නවා (image_aa4305.jpg අනුව)
             const episodes = await page.evaluate(() => {
-                // මෙතන class එක `.download-btn` හෝ ඒ Popup එකේ තියෙන ලින්ක් ටික ගන්නවා
-                const epLinks = Array.from(document.querySelectorAll('.episodes-popup-overlay a, .download-btn'));
-                return epLinks.map(el => ({
-                    name: el.innerText.trim(),
-                    url: el.href || el.getAttribute('onclick')?.match(/'(https?:\/\/[^']+)'/)?.[1] || ""
-                })).filter(ep => ep.url !== "" && !ep.name.toLowerCase().includes('select episode'));
+                const items = Array.from(document.querySelectorAll('.episode-popup-item'));
+                return items.map((item, index) => ({
+                    episode_index: index + 1,
+                    name: item.querySelector('h4')?.innerText.trim() || `Episode ${index + 1}`,
+                    info: item.querySelector('.episode-popup-info')?.innerText.trim() || ""
+                }));
             });
 
             return { success: true, type: 'series', results: episodes };
         }
 
-        // --- 2. එපිසෝඩ් නැත්නම් කලින් විදියටම Direct Download Sniper වැඩ කරනවා ---
-        console.log("🚀 Starting Sniping for Movie...");
-        for (let i = 0; i < 8; i++) {
-            if (capturedUrl) break;
-
+        // --- 2. යූසර් එපිසෝඩ් එකක් ඉල්ලලා තියෙනවා නම් ඒක විතරක් Sniper කරනවා ---
+        if (isSeries && epNum) {
+            console.log(`🎯 Sniping Episode ${epNum}...`);
+            
             await page.evaluate(() => {
-                const buttons = Array.from(document.querySelectorAll('button, a'));
-                const target = buttons.find(b => 
+                const btn = Array.from(document.querySelectorAll('button')).find(b => 
+                    b.innerText.toLowerCase().includes('select episode')
+                );
+                if (btn) btn.click();
+            });
+
+            await page.waitForSelector('.episode-popup-item', { timeout: 10000 });
+
+            // අදාළ එපිසෝඩ් එකේ බටන් එක ඔබනවා
+            const clicked = await page.evaluate((targetNo) => {
+                const items = document.querySelectorAll('.episode-popup-item');
+                const target = items[targetNo - 1]?.querySelector('button.episode-popup-btn');
+                if (target) {
+                    target.click();
+                    return true;
+                }
+                return false;
+            }, epNum);
+
+            if (!clicked) return { success: false, error: "Episode not found." };
+        } 
+        
+        // --- 3. මූවී එකක් නම් සාමාන්‍ය විදියට බටන් එක ඔබනවා ---
+        else {
+            console.log("🎬 Movie detected. Sniping...");
+            await page.evaluate(() => {
+                const btn = Array.from(document.querySelectorAll('button')).find(b => 
                     b.innerText.toLowerCase().includes('download') && 
                     !b.innerText.toLowerCase().includes('select')
                 );
-                if (target) target.click();
+                if (btn) btn.click();
             });
+        }
 
-            await new Promise(r => setTimeout(r, 3000));
+        // 🔄 ලින්ක් එක අහුවෙනකම් ලූප් එක (Processing wait)
+        for (let i = 0; i < 10; i++) {
             if (capturedUrl) break;
+            await new Promise(r => setTimeout(r, 2000));
+            if (capturedUrl) break;
+            
+            // ඇඩ් එකක් නිසා වැඩේ නැවතුණොත් ආයේ බටන් එක ඔබන්න
+            if (i % 2 === 0 && !capturedUrl) {
+                await page.evaluate((isS, eN) => {
+                    if (isS && eN) {
+                        const items = document.querySelectorAll('.episode-popup-item');
+                        items[eN - 1]?.querySelector('button.episode-popup-btn')?.click();
+                    } else {
+                        const btn = Array.from(document.querySelectorAll('button')).find(b => 
+                            b.innerText.toLowerCase().includes('download') && !b.innerText.toLowerCase().includes('select')
+                        );
+                        if (btn) btn.click();
+                    }
+                }, isSeries, epNum);
+            }
         }
 
         if (capturedUrl) {
             return { success: true, type: 'direct', download_url: capturedUrl };
         } else {
-            return { success: false, error: "Link not found or timed out." };
+            return { success: false, error: "Link capture timed out." };
         }
 
     } catch (e) {
