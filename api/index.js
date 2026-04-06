@@ -367,25 +367,18 @@ async function getCartoonDownload(cartoonUrl) {
 
         let capturedUrl = null;
 
-        // 🎯 REDIRECT SNIFFER: download-proxy එකේ Redirect එක අල්ලනවා
+        // 🎯 REDIRECT SNIFFER
         page.on('response', async (response) => {
             const url = response.url();
-            
-            // අපි හොයන download-proxy ලින්ක් එක ආවම
             if (url.includes('download-proxy')) {
                 const status = response.status();
-                
-                // 302 Found (Redirect) එකක් නම් Location එක බලනවා
                 if (status >= 300 && status <= 308) {
                     const headers = response.headers();
                     if (headers['location']) {
                         capturedUrl = headers['location'];
-                        console.log("🎯 Direct Link Captured from Proxy Redirect:", capturedUrl);
                     }
                 }
             }
-            
-            // හදිසියේ හරි කෙලින්ම MP4 එකක් Network එකේ ගියොත් ඒකත් ගන්නවා
             if (url.includes('.mp4') || url.includes('files.cartoons.lk')) {
                 capturedUrl = url;
             }
@@ -401,31 +394,61 @@ async function getCartoonDownload(cartoonUrl) {
 
         await page.goto(cartoonUrl, { waitUntil: 'networkidle2', timeout: 30000 });
 
-        console.log("🚀 Starting Sniping...");
+        // --- 1. බලනවා මේකේ තියෙන්නේ Episode List එකක්ද කියලා ---
+        const isSeries = await page.evaluate(() => {
+            const btn = Array.from(document.querySelectorAll('button, a')).find(b => 
+                b.innerText.toLowerCase().includes('select episode')
+            );
+            return !!btn;
+        });
 
+        if (isSeries) {
+            console.log("📺 Series detected. Extracting episodes...");
+            // Select Episode button එක ඔබනවා
+            await page.evaluate(() => {
+                const btn = Array.from(document.querySelectorAll('button, a')).find(b => 
+                    b.innerText.toLowerCase().includes('select episode')
+                );
+                if (btn) btn.click();
+            });
+
+            // Episode List එක එනකම් පොඩ්ඩක් ඉන්නවා
+            await new Promise(r => setTimeout(r, 2000));
+
+            const episodes = await page.evaluate(() => {
+                // මෙතන class එක `.download-btn` හෝ ඒ Popup එකේ තියෙන ලින්ක් ටික ගන්නවා
+                const epLinks = Array.from(document.querySelectorAll('.episodes-popup-overlay a, .download-btn'));
+                return epLinks.map(el => ({
+                    name: el.innerText.trim(),
+                    url: el.href || el.getAttribute('onclick')?.match(/'(https?:\/\/[^']+)'/)?.[1] || ""
+                })).filter(ep => ep.url !== "" && !ep.name.toLowerCase().includes('select episode'));
+            });
+
+            return { success: true, type: 'series', results: episodes };
+        }
+
+        // --- 2. එපිසෝඩ් නැත්නම් කලින් විදියටම Direct Download Sniper වැඩ කරනවා ---
+        console.log("🚀 Starting Sniping for Movie...");
         for (let i = 0; i < 8; i++) {
             if (capturedUrl) break;
 
-            // බටන් එක ඔබන්න (Text එක අනුව හොයන එක වඩාත් සාර්ථකයි)
             await page.evaluate(() => {
                 const buttons = Array.from(document.querySelectorAll('button, a'));
                 const target = buttons.find(b => 
-                    b.innerText.toLowerCase().includes('download')
+                    b.innerText.toLowerCase().includes('download') && 
+                    !b.innerText.toLowerCase().includes('select')
                 );
                 if (target) target.click();
             });
 
-            // ක්ලික් එකට පස්සේ ඇඩ් එක වැහෙනකම් සහ Proxy ලින්ක් එක එනකම් ඉන්නවා
-            // ඔයා කිව්ව වගේ processing එකට වෙලාව යන නිසා මෙතන 3s ක් දෙනවා
             await new Promise(r => setTimeout(r, 3000));
-            
             if (capturedUrl) break;
         }
 
         if (capturedUrl) {
-            return { success: true, download_url: capturedUrl };
+            return { success: true, type: 'direct', download_url: capturedUrl };
         } else {
-            return { success: false, error: "Processing timed out or link not found." };
+            return { success: false, error: "Link not found or timed out." };
         }
 
     } catch (e) {
