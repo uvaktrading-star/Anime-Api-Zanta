@@ -357,59 +357,86 @@ app.get('/api/cinesubz/get-sonic', async (req, res) => {
 });
 
 app.get('/api/cinesubz/get-mp4', async (req, res) => {
-    const sonicUrl = req.query.url; // උදා: https://bot3.sonic-cloud.online/server5/202510/...
-    if (!sonicUrl) return res.json({ success: false, error: "URL is required" });
-
+    const sonicUrl = req.query.url;
+    let browser;
     try {
-        console.log("LOG: Step 2 - Fetching MP4 using Axios POST...");
+        browser = await puppeteer.launch({
+            executablePath: HEROKU_CHROME_PATH,
+            headless: true,
+            args: ['--no-sandbox', '--disable-setuid-sandbox']
+        });
+        const page = await browser.newPage();
+        let finalMp4 = null;
 
-        // 1. Sonic Cloud URL එකෙන් ID එක සහ අදාළ විස්තර වෙන් කරගන්නවා
-        // URL එක: .../server5/202510/MovieName?ext=mp4
-        const urlParts = sonicUrl.split('/');
-        const server = urlParts[3]; // server5
-        const folder = urlParts[4]; // 202510
-        const fileNameWithQuery = urlParts[5]; // MovieName?ext=mp4
-        const fileName = fileNameWithQuery.split('?')[0];
+        // 1. Sniffer එක දානවා හැම request එකක්ම අල්ලන්න
+        await page.setRequestInterception(true);
+        page.on('request', interceptedRequest => {
+            const url = interceptedRequest.url();
+            // මෙතනදී තමයි අර හොර ලින්ක් එක අහුවෙන්නේ
+            if (url.includes('.mp4') || url.includes('sume321.online') || url.includes('bot45')) {
+                finalMp4 = url;
+                console.log("🎯 >>> SNIPER DETECTED:", url);
+            }
+            interceptedRequest.continue();
+        });
 
-        // 2. ඒ පේජ් එකට අදාළ POST Endpoint එක හදාගන්නවා
-        // සාමාන්‍යයෙන් මේ වගේ සයිට් වල POST එක යන්නේ ඒ URL එකටමයි
-        const postUrl = sonicUrl;
+        // 2. Sonic Page එකට යනවා
+        console.log("LOG: Step 2 - Opening Sonic Cloud...");
+        await page.goto(sonicUrl, { waitUntil: 'networkidle2' });
+        
+        // 3. Browser එක ඇතුළේම Fetch එකක් Run කරනවා
+        // මේකෙන් වෙන්නේ සයිට් එකේ Cookies පාවිච්චි කරලා POST එකක් බලෙන්ම යවන එක
+        console.log("LOG: Triggering Internal Fetch Sniper...");
+        finalMp4 = await page.evaluate(async () => {
+            try {
+                // පේජ් එකේ තියෙන Form එක හෝ Button එක ඇතුළේ තියෙන logic එක බලෙන් කරනවා
+                const response = await fetch(window.location.href, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+                });
+                
+                // Redirect URL එක අල්ලගන්න බලනවා
+                if (response.url && (response.url.includes('.mp4') || response.url.includes('sume321'))) {
+                    return response.url;
+                }
+                return null;
+            } catch (e) { return null; }
+        });
 
-        // 3. POST Request එක යවනවා (Direct Download බටන් එක එබුවා හා සමානව)
-        // මෙහිදී අපි 'maxRedirects: 0' දානවා, එතකොට අපිට Redirect වන ලින්ක් එක අල්ලගන්න පුළුවන්
-        const response = await axios.post(postUrl, {}, {
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                'Referer': 'https://cinesubz.net/',
-                'Origin': 'https://bot3.sonic-cloud.online',
-                'Content-Type': 'application/x-www-form-urlencoded'
-            },
-            validateStatus: (status) => status >= 200 && status < 400, // 302 Redirect අල්ලන්න
-            maxRedirects: 0 
-        }).catch(err => err.response);
+        // 4. ඒකෙන් බැරි වුණොත් සාමාන්‍ය විදිහට බටන් එක ඔබනවා
+        if (!finalMp4) {
+            console.log("LOG: Internal Fetch failed, clicking button manually...");
+            await page.evaluate(() => {
+                const btn = Array.from(document.querySelectorAll('a, button'))
+                                 .find(b => b.innerText.toLowerCase().includes('direct download'));
+                if (btn) btn.click();
+            });
 
-        // 4. Redirect ලින්ක් එක පරීක්ෂා කිරීම (Location Header)
-        let finalLink = response.headers['location'];
-
-        // 5. බැරිම වුණොත් මචං, පරණ විදිහටම sume321 domain එක තියෙන ලින්ක් එකක් එනවද බලනවා
-        if (!finalLink && response.data) {
-            // සමහරවිට ලින්ක් එක Response Body එකේ තියෙන්න පුළුවන්
-            const match = response.data.match(/https?:\/\/[^\s"'<>]+sume321\.online[^\s"'<>]*/);
-            if (match) finalLink = match[0];
+            // තත්පර 10ක් Network එක දිහා බලන් ඉන්නවා
+            for (let i = 0; i < 20; i++) {
+                if (finalMp4) break;
+                await new Promise(r => setTimeout(r, 500));
+            }
         }
 
-        if (finalLink) {
-            console.log("✅ SUCCESS! AXIO CAPTURED:", finalLink);
-            res.json({ success: true, mp4_url: finalLink });
+        if (finalMp4) {
+            res.json({ success: true, mp4_url: finalMp4 });
         } else {
-            console.log("❌ Axios fail, try Puppeteer fallback...");
-            // මෙතනට ඔයාගේ පරණ Puppeteer code එක ඕනනම් දාන්න පුළුවන් Backup එකක් විදිහට
-            res.json({ success: false, error: "Could not capture direct link via POST." });
+            // අන්තිම උත්සාහය: පේජ් එකේ තියෙන හැම ලින්ක් එකක්ම චෙක් කරනවා
+            const links = await page.evaluate(() => Array.from(document.querySelectorAll('a')).map(a => a.href));
+            const found = links.find(l => l.includes('sume321.online') || l.includes('.mp4'));
+            
+            if (found) {
+                res.json({ success: true, mp4_url: found });
+            } else {
+                res.json({ success: false, error: "Sniper failed to find the link." });
+            }
         }
 
     } catch (e) {
-        console.error("❌ ERROR:", e.message);
         res.json({ success: false, error: e.message });
+    } finally {
+        if (browser) await browser.close();
     }
 });
 
