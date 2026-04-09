@@ -33,20 +33,36 @@ async function getCineSubzDownloadPage(movieUrl) {
                 '--no-sandbox', 
                 '--disable-setuid-sandbox', 
                 '--disable-dev-shm-usage',
-                '--disable-blink-features=AutomationControlled'
+                '--disable-blink-features=AutomationControlled',
+                '--disable-web-security',
+                '--disable-features=IsolateOrigins,site-per-process'
             ]
         });
 
         const page = await browser.newPage();
+        
+        // ✅ Bypass DevTools detection - override console.log and disable-devtool
+        await page.evaluateOnNewDocument(() => {
+            // Remove disable-devtool
+            window.__REACT_DEVTOOLS_GLOBAL_HOOK__ = { isDisabled: true };
+            
+            // Override console methods
+            const noop = () => {};
+            console.log = noop;
+            console.warn = noop;
+            console.error = noop;
+            
+            // Block disable-devtool script
+            Object.defineProperty(window, 'devtools', { get: () => undefined });
+        });
+        
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36');
         
         page.setDefaultTimeout(30000);
         page.setDefaultNavigationTimeout(30000);
 
-        // Add extra headers to avoid detection
         await page.setExtraHTTPHeaders({
             'Accept-Language': 'en-US,en;q=0.9',
-            'Accept-Encoding': 'gzip, deflate, br',
             'Sec-Ch-Ua': '"Google Chrome";v="123", "Not:A-Brand";v="8"',
             'Sec-Ch-Ua-Mobile': '?0',
             'Sec-Ch-Ua-Platform': '"Windows"'
@@ -55,9 +71,11 @@ async function getCineSubzDownloadPage(movieUrl) {
         await page.setRequestInterception(true);
         page.on('request', (request) => {
             const url = request.url();
-            if (url.includes('googleads') || url.includes('doubleclick') || 
-                url.includes('popads') || url.includes('adstudio') ||
-                url.includes('googlesyndication')) {
+            // Block disable-devtool script
+            if (url.includes('disable-devtool')) {
+                request.abort();
+            } else if (url.includes('googleads') || url.includes('doubleclick') || 
+                url.includes('popads') || url.includes('adstudio')) {
                 request.abort();
             } else {
                 request.continue();
@@ -66,7 +84,6 @@ async function getCineSubzDownloadPage(movieUrl) {
 
         await page.goto(movieUrl, { waitUntil: 'networkidle2', timeout: 30000 });
         
-        // Wait for content to load
         await delay(2000);
         
         let downloadPageUrl = await page.evaluate(() => {
@@ -100,11 +117,99 @@ async function getCineSubzDownloadPage(movieUrl) {
     }
 }
 
-// --- Step 2: Extract direct link by waiting for JavaScript to render ---
+// --- Step 2: Extract direct link using direct API call (bypass page) ---
 async function extractDirectLinkFromSonicCloud(sonicUrl) {
+    try {
+        console.log(`☁️ Sonic-Cloud: Trying direct API extraction...`);
+        
+        // Extract the file path from URL
+        const urlParts = sonicUrl.split('/server6/');
+        if (urlParts.length < 2) {
+            throw new Error("Invalid URL format");
+        }
+        
+        const baseUrl = urlParts[0];
+        const filePath = urlParts[1];
+        
+        // Try different API endpoints
+        const apiEndpoints = [
+            `${baseUrl}/api/download-data/${filePath}`,
+            `${baseUrl}/api/get-link/${filePath}`,
+            `${baseUrl}/api/file-info/${filePath}`,
+            `${baseUrl}/api/download/${filePath.split('?')[0]}`
+        ];
+        
+        let finalDirectLink = null;
+        
+        for (const apiUrl of apiEndpoints) {
+            if (finalDirectLink) break;
+            
+            console.log(`📡 Trying API: ${apiUrl}`);
+            
+            try {
+                const response = await axios.get(apiUrl, {
+                    headers: {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                        'Referer': sonicUrl,
+                        'Origin': baseUrl,
+                        'Accept': 'application/json',
+                        'X-Requested-With': 'XMLHttpRequest'
+                    },
+                    timeout: 10000
+                });
+                
+                console.log(`📡 Response:`, JSON.stringify(response.data));
+                
+                // Check for redirect or URL in response
+                if (response.data) {
+                    if (response.data.redirect) {
+                        finalDirectLink = response.data.redirect.startsWith('/') 
+                            ? `${baseUrl}${response.data.redirect}` 
+                            : response.data.redirect;
+                        break;
+                    }
+                    if (response.data.url) {
+                        finalDirectLink = response.data.url;
+                        break;
+                    }
+                    if (response.data.download_url) {
+                        finalDirectLink = response.data.download_url;
+                        break;
+                    }
+                    if (typeof response.data === 'string' && response.data.includes('http')) {
+                        finalDirectLink = response.data;
+                        break;
+                    }
+                }
+            } catch (e) {
+                console.log(`⚠️ API ${apiUrl} failed: ${e.message}`);
+            }
+        }
+        
+        // If API didn't work, try to extract from the page with Puppeteer
+        if (!finalDirectLink) {
+            console.log("📄 Falling back to Puppeteer page extraction...");
+            finalDirectLink = await extractWithPuppeteer(sonicUrl);
+        }
+        
+        if (finalDirectLink && !finalDirectLink.includes('fordev.jpg')) {
+            console.log(`✅ Final direct link: ${finalDirectLink}`);
+            return { success: true, downloadUrl: finalDirectLink };
+        }
+        
+        return { success: false, error: "Could not extract direct download link" };
+
+    } catch (error) {
+        console.error("Extraction Error:", error.message);
+        return { success: false, error: error.message };
+    }
+}
+
+// --- Puppeteer fallback with DevTools bypass ---
+async function extractWithPuppeteer(sonicUrl) {
     let browser;
     try {
-        console.log(`☁️ Sonic-Cloud: Extracting direct link from ${sonicUrl}`);
+        console.log("🕷️ Launching Puppeteer with stealth mode...");
         
         browser = await puppeteer.launch({
             executablePath: HEROKU_CHROME_PATH,
@@ -113,255 +218,130 @@ async function extractDirectLinkFromSonicCloud(sonicUrl) {
                 '--no-sandbox', 
                 '--disable-setuid-sandbox', 
                 '--disable-dev-shm-usage',
-                '--disable-blink-features=AutomationControlled'
+                '--disable-blink-features=AutomationControlled',
+                '--disable-web-security',
+                '--disable-features=IsolateOrigins,site-per-process'
             ]
-        });
-
-        let finalDirectLink = null;
-        let allNetworkResponses = [];
-        let capturedUrls = [];
-        
-        // 🎯 Listen for NEW TAB creation
-        browser.on('targetcreated', async (target) => {
-            if (target.type() === 'page') {
-                try {
-                    await delay(1500);
-                    const newPage = await target.page();
-                    if (newPage) {
-                        const url = newPage.url();
-                        console.log(`🆕 NEW TAB: ${url.substring(0, 150)}`);
-                        capturedUrls.push(url);
-                        
-                        // Check if this is a real download link (not an image)
-                        if (url.includes('.mp4') || (url.includes('bot') && url.includes('online') && !url.includes('fordev.jpg'))) {
-                            finalDirectLink = url;
-                            console.log(`🎯 CAPTURED: ${finalDirectLink}`);
-                        }
-                        
-                        // Monitor new tab for redirects
-                        setTimeout(async () => {
-                            try {
-                                const currentUrl = newPage.url();
-                                if (currentUrl !== url && currentUrl !== 'about:blank') {
-                                    console.log(`🔄 TAB NAVIGATED TO: ${currentUrl}`);
-                                    if (currentUrl.includes('.mp4') || (currentUrl.includes('bot') && !currentUrl.includes('fordev.jpg'))) {
-                                        finalDirectLink = currentUrl;
-                                    }
-                                }
-                            } catch (e) {}
-                            await newPage.close().catch(() => {});
-                        }, 8000);
-                    }
-                } catch (e) {
-                    console.log(`⚠️ New tab error: ${e.message}`);
-                }
-            }
         });
 
         const page = await browser.newPage();
         
-        // Add stealth headers
-        await page.setExtraHTTPHeaders({
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Sec-Ch-Ua': '"Google Chrome";v="123", "Not:A-Brand";v="8"',
-            'Sec-Ch-Ua-Mobile': '?0',
-            'Sec-Ch-Ua-Platform': '"Windows"'
+        // ✅ Bypass all anti-bot measures
+        await page.evaluateOnNewDocument(() => {
+            // Remove webdriver property
+            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+            
+            // Override chrome detection
+            window.chrome = { runtime: {} };
+            
+            // Remove disable-devtool
+            window.__REACT_DEVTOOLS_GLOBAL_HOOK__ = { isDisabled: true };
+            
+            // Override console methods
+            const noop = () => {};
+            console.log = noop;
+            console.warn = noop;
+            console.error = noop;
+            
+            // Block devtools detection
+            Object.defineProperty(window, 'devtools', { get: () => undefined });
+            Object.defineProperty(window, '__devtools', { get: () => undefined });
         });
         
-        // Capture network responses
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36');
+        
+        // Set viewport
+        await page.setViewport({ width: 1920, height: 1080 });
+        
+        // Block anti-bot scripts
         await page.setRequestInterception(true);
-        
-        page.on('response', async (response) => {
-            const url = response.url();
-            const status = response.status();
-            
-            // Log important responses
-            if (url.includes('download-data') || url.includes('get_link') || url.includes('.mp4')) {
-                console.log(`📡 [${status}] ${url.substring(0, 150)}`);
-            }
-            
-            allNetworkResponses.push({ url: url, status: status });
-            
-            // Capture MP4 links
-            if (url.includes('.mp4') && !url.includes('fordev.jpg')) {
-                finalDirectLink = url;
-                console.log(`🎯 MP4 CAPTURED: ${finalDirectLink}`);
-            }
-            
-            // Capture redirects
-            if (status >= 300 && status < 400) {
-                const location = response.headers()['location'];
-                if (location && (location.includes('.mp4') || location.includes('bot'))) {
-                    finalDirectLink = location;
-                    console.log(`🎯 REDIRECT: ${finalDirectLink}`);
-                }
-            }
-        });
-        
         page.on('request', (request) => {
             const url = request.url();
-            if (url.includes('googleads') || url.includes('doubleclick') || 
-                url.includes('popads') || url.includes('adstudio')) {
+            if (url.includes('disable-devtool') || 
+                url.includes('devtools') ||
+                url.includes('googleads') || 
+                url.includes('doubleclick') || 
+                url.includes('popads') || 
+                url.includes('adstudio')) {
                 request.abort();
             } else {
                 request.continue();
             }
         });
-
-        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36');
-
-        // Navigate to page and wait for JavaScript to execute
-        console.log("📄 Loading sonic-cloud page...");
+        
+        console.log("📄 Loading page...");
         await page.goto(sonicUrl, { waitUntil: 'networkidle2', timeout: 30000 });
         
-        // ✅ CRITICAL: Wait for JavaScript to render buttons
-        console.log("⏳ Waiting for JavaScript to render download buttons...");
-        await delay(5000);
+        // Wait for content
+        await delay(3000);
         
-        // ✅ Wait for specific elements to appear
-        try {
-            await page.waitForFunction(() => {
-                const buttons = Array.from(document.querySelectorAll('a, button'));
-                const downloadBtn = buttons.find(b => 
-                    (b.innerText || '').toLowerCase().includes('direct download')
-                );
-                return downloadBtn !== undefined;
-            }, { timeout: 15000 });
-            console.log("✅ Direct Download buttons detected!");
-        } catch (e) {
-            console.log("⚠️ No Direct Download buttons found after waiting");
-        }
-
-        // Try API endpoint with better headers
-        console.log("📡 Trying API endpoint...");
-        try {
-            const apiUrl = sonicUrl.replace('/server6/', '/api/download-data/');
-            const apiResponse = await axios.get(apiUrl, {
-                headers: { 
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                    'Referer': sonicUrl,
-                    'Origin': 'https://bot3.sonic-cloud.online',
-                    'Accept': 'application/json',
-                    'X-Requested-With': 'XMLHttpRequest'
-                },
-                timeout: 10000
-            });
+        // Try to get download link from page
+        const downloadLink = await page.evaluate(() => {
+            // Look for any link containing direct download
+            const allLinks = Array.from(document.querySelectorAll('a'));
             
-            console.log(`📡 API Response:`, JSON.stringify(apiResponse.data));
-            
-            if (apiResponse.data && apiResponse.data.redirect) {
-                const baseUrl = sonicUrl.split('/server6/')[0];
-                let redirectPath = apiResponse.data.redirect;
-                if (redirectPath.startsWith('/')) {
-                    finalDirectLink = `${baseUrl}${redirectPath}`;
-                } else {
-                    finalDirectLink = `${baseUrl}/server6/${redirectPath}`;
-                }
-                if (!finalDirectLink.includes('.mp4')) {
-                    finalDirectLink = finalDirectLink.split('?')[0] + '.mp4';
-                }
-                console.log(`🎯 API REDIRECT LINK: ${finalDirectLink}`);
-                return { success: true, downloadUrl: finalDirectLink };
-            }
-        } catch (e) {
-            console.log(`⚠️ API failed: ${e.message}`);
-        }
-
-        // ✅ Find and click Direct Download buttons (after waiting for JS)
-        console.log("🔘 Looking for Direct Download buttons...");
-        
-        const buttons = await page.evaluate(() => {
-            const allElements = Array.from(document.querySelectorAll('a, button, div[role="button"]'));
-            const results = [];
-            
-            for (const el of allElements) {
-                const text = (el.innerText || '').toLowerCase();
-                const href = el.href || '';
-                const className = el.className || '';
+            for (const link of allLinks) {
+                const href = link.href || '';
+                const text = (link.innerText || '').toLowerCase();
                 
                 // Skip Telegram
-                if (text.includes('telegram') || href.includes('t.me')) continue;
+                if (href.includes('t.me') || text.includes('telegram')) continue;
                 
-                // Look for any download-related element
-                if (text.includes('direct download') || 
-                    text.includes('direct download 1') ||
-                    text.includes('direct download 2') ||
-                    text.includes('direct') && text.includes('download') ||
-                    className.includes('download') ||
-                    href.includes('download')) {
-                    
-                    results.push({
-                        text: text,
-                        href: href,
-                        tagName: el.tagName,
-                        className: className
-                    });
+                // Look for direct download
+                if (href.includes('.mp4') || 
+                    (text.includes('direct') && text.includes('download')) ||
+                    href.includes('bot') && !href.includes('image')) {
+                    return href;
                 }
             }
-            return results;
+            
+            // Look for any element with download attribute
+            const downloadElements = Array.from(document.querySelectorAll('[download], [data-download]'));
+            for (const el of downloadElements) {
+                const href = el.href || el.getAttribute('data-download');
+                if (href && !href.includes('t.me')) return href;
+            }
+            
+            return null;
         });
         
-        console.log(`📊 Found ${buttons.length} direct download buttons`);
-        
-        if (buttons.length === 0) {
-            // Dump page content for debugging
-            const pageText = await page.evaluate(() => document.body.innerText);
-            console.log(`📄 Page text sample: ${pageText.substring(0, 500)}`);
+        if (downloadLink && !downloadLink.includes('fordev.jpg')) {
+            console.log(`🎯 Found download link: ${downloadLink}`);
+            return downloadLink;
         }
         
-        for (const btn of buttons) {
-            if (finalDirectLink) break;
-            
-            console.log(`🔘 Clicking: "${btn.text.substring(0, 50)}"`);
-            
-            if (btn.href && btn.href.includes('.mp4')) {
-                finalDirectLink = btn.href;
-                break;
-            }
-            
-            // Click with JavaScript to ensure it works
-            await page.evaluate((btnInfo) => {
-                const elements = Array.from(document.querySelectorAll('a, button, div[role="button"]'));
-                for (const el of elements) {
-                    const text = (el.innerText || '').toLowerCase();
-                    const href = el.href || '';
-                    if (text.includes(btnInfo.text) || href === btnInfo.href) {
-                        el.click();
-                        break;
-                    }
+        // Try to trigger download button click
+        const clicked = await page.evaluate(() => {
+            const buttons = Array.from(document.querySelectorAll('a, button'));
+            for (const btn of buttons) {
+                const text = (btn.innerText || '').toLowerCase();
+                const href = btn.href || '';
+                
+                if ((text.includes('direct') && text.includes('download')) ||
+                    (href.includes('download') && !href.includes('telegram'))) {
+                    btn.click();
+                    return true;
                 }
-            }, btn);
-            
+            }
+            return false;
+        });
+        
+        if (clicked) {
+            console.log("🔘 Clicked download button, waiting for navigation...");
             await delay(5000);
-        }
-        
-        // Wait for network responses
-        console.log("⏳ Waiting for network responses...");
-        await delay(8000);
-        
-        // Check all captured URLs
-        const allUrls = [...capturedUrls, ...allNetworkResponses.map(r => r.url)];
-        
-        for (const url of allUrls) {
-            // Look for MP4 or bot links (exclude fake images)
-            if (url && (url.includes('.mp4') || (url.includes('bot') && !url.includes('fordev.jpg') && !url.includes('image')))) {
-                finalDirectLink = url;
-                console.log(`🎯 FOUND: ${finalDirectLink}`);
-                break;
+            
+            const currentUrl = page.url();
+            if (currentUrl !== sonicUrl && !currentUrl.includes('fordev.jpg')) {
+                console.log(`🎯 Navigated to: ${currentUrl}`);
+                return currentUrl;
             }
         }
         
-        if (finalDirectLink && !finalDirectLink.includes('fordev.jpg')) {
-            console.log(`✅ Final direct link: ${finalDirectLink}`);
-            return { success: true, downloadUrl: finalDirectLink };
-        }
+        return null;
         
-        console.log(`⚠️ No direct link found`);
-        return { success: false, error: "Could not extract direct download link" };
-
     } catch (error) {
-        console.error("Extraction Error:", error.message);
-        return { success: false, error: error.message };
+        console.error("Puppeteer extraction error:", error.message);
+        return null;
     } finally {
         if (browser) await browser.close();
     }
