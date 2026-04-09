@@ -91,7 +91,7 @@ async function getCineSubzDownloadPage(movieUrl) {
     }
 }
 
-// --- Step 2: Extract direct link by capturing new tab URL ---
+// --- Step 2: Extract direct link from sonic-cloud page ---
 async function extractDirectLinkFromSonicCloud(sonicUrl) {
     let browser;
     try {
@@ -108,44 +108,40 @@ async function extractDirectLinkFromSonicCloud(sonicUrl) {
             ]
         });
 
-        // Array to store captured URLs from new tabs
-        let capturedUrls = [];
         let finalDirectLink = null;
+        let capturedUrls = [];
         
-        // 🎯 Listen for NEW TAB creation BEFORE creating the page
+        // 🎯 Listen for NEW TAB creation
         browser.on('targetcreated', async (target) => {
             if (target.type() === 'page') {
                 try {
+                    await delay(1500); // Wait for page to load
                     const newPage = await target.page();
                     if (newPage) {
-                        // Wait a bit for the page to load
-                        await delay(1000);
                         const url = newPage.url();
                         console.log(`🆕 NEW TAB DETECTED: ${url.substring(0, 150)}`);
-                        
                         capturedUrls.push(url);
                         
-                        // Check if this is a download link
-                        if (url.includes('.mp4') || url.includes('download') || url.includes('bot')) {
+                        // Check if this is a download link (MP4 or bot with mp4)
+                        if (url.includes('.mp4') || (url.includes('bot') && url.includes('online'))) {
                             finalDirectLink = url;
-                            console.log(`🎯 CAPTURED FROM NEW TAB: ${finalDirectLink}`);
+                            console.log(`🎯 CAPTURED DIRECT LINK: ${finalDirectLink}`);
                         }
                         
-                        // Also wait for possible redirect
+                        // Wait for possible redirect
                         setTimeout(async () => {
                             try {
                                 const currentUrl = newPage.url();
-                                if (currentUrl && currentUrl !== url) {
-                                    console.log(`🔄 NEW TAB REDIRECTED TO: ${currentUrl.substring(0, 150)}`);
-                                    if (currentUrl.includes('.mp4') || currentUrl.includes('download')) {
+                                if (currentUrl !== url) {
+                                    console.log(`🔄 TAB REDIRECTED TO: ${currentUrl.substring(0, 150)}`);
+                                    capturedUrls.push(currentUrl);
+                                    if (currentUrl.includes('.mp4')) {
                                         finalDirectLink = currentUrl;
                                     }
-                                    capturedUrls.push(currentUrl);
                                 }
-                                // Close the new tab after capturing
-                                await newPage.close().catch(() => {});
                             } catch (e) {}
-                        }, 3000);
+                            await newPage.close().catch(() => {});
+                        }, 4000);
                     }
                 } catch (e) {
                     console.log(`⚠️ Error handling new tab: ${e.message}`);
@@ -173,7 +169,7 @@ async function extractDirectLinkFromSonicCloud(sonicUrl) {
         await page.goto(sonicUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
         await delay(3000);
 
-        // 🔥 FIRST: Try API endpoint (might be blocked)
+        // 🔥 FIRST: Try API endpoint
         console.log("📡 Trying API endpoint...");
         try {
             const apiUrl = sonicUrl.replace('/server6/', '/api/download-data/');
@@ -210,89 +206,102 @@ async function extractDirectLinkFromSonicCloud(sonicUrl) {
             console.log(`⚠️ API endpoint failed: ${e.message}`);
         }
 
-        // SECOND: Find and click the download button
-        console.log("🔘 Looking for download button...");
+        // SECOND: Find and click ONLY Direct Download buttons (NOT Telegram)
+        console.log("🔘 Looking for Direct Download buttons...");
         
-        // Try different methods to find the button
-        let buttonClicked = false;
-        
-        // Method 1: Try to find by href pattern
-        const buttonInfo = await page.evaluate(() => {
-            // Find any link that might be the download button
-            const allLinks = Array.from(document.querySelectorAll('a'));
-            for (const link of allLinks) {
-                const href = link.href || '';
-                const text = (link.innerText || '').toLowerCase();
+        // Get all buttons/links with their text
+        const buttons = await page.evaluate(() => {
+            const allElements = Array.from(document.querySelectorAll('a, button'));
+            const results = [];
+            
+            for (const el of allElements) {
+                const text = (el.innerText || '').toLowerCase();
+                const href = el.href || '';
                 
-                // Look for bot links or download text
-                if (href.includes('bot') || 
-                    text.includes('direct download') || 
-                    text.includes('download 2') ||
-                    text.includes('direct')) {
-                    return { found: true, href: href, text: text, selector: 'link' };
+                // Skip Telegram buttons
+                if (text.includes('telegram')) {
+                    continue;
+                }
+                
+                // Look for Direct Download buttons
+                if (text.includes('direct download') || 
+                    text.includes('direct download 1') ||
+                    text.includes('direct download 2') ||
+                    text.includes('direct') && text.includes('download') ||
+                    href.includes('bot') && !href.includes('t.me')) {
+                    
+                    results.push({
+                        text: text,
+                        href: href,
+                        tagName: el.tagName
+                    });
                 }
             }
             
-            // Try buttons
-            const allButtons = Array.from(document.querySelectorAll('button'));
-            for (const btn of allButtons) {
-                const text = (btn.innerText || '').toLowerCase();
-                if (text.includes('download') || text.includes('direct')) {
-                    return { found: true, text: text, selector: 'button' };
-                }
-            }
-            return { found: false };
+            return results;
         });
         
-        if (buttonInfo.found) {
-            console.log(`🔘 Found button/link with text: ${buttonInfo.text}`);
+        console.log(`📊 Found ${buttons.length} direct download buttons`);
+        
+        let buttonClicked = false;
+        
+        for (const btn of buttons) {
+            if (finalDirectLink) break;
             
-            if (buttonInfo.selector === 'link' && buttonInfo.href) {
-                // If it's a direct link, just use it
-                if (buttonInfo.href.includes('.mp4')) {
-                    finalDirectLink = buttonInfo.href;
-                    console.log(`🎯 DIRECT LINK FROM HREF: ${finalDirectLink}`);
-                } else {
-                    // Open in new tab by clicking with ctrl+click or using target="_blank"
-                    await page.evaluate((href) => {
-                        const link = document.querySelector(`a[href="${href}"]`);
-                        if (link) {
-                            // Simulate opening in new tab
-                            const event = new MouseEvent('click', {
-                                view: window,
-                                bubbles: true,
-                                cancelable: true,
-                                ctrlKey: true
-                            });
-                            link.dispatchEvent(event);
-                        }
-                    }, buttonInfo.href);
-                    buttonClicked = true;
-                    console.log("🔘 Clicked link to open in new tab");
-                    await delay(5000);
-                }
+            console.log(`🔘 Trying button: "${btn.text}"`);
+            
+            if (btn.href && btn.href.includes('.mp4')) {
+                // Direct MP4 link
+                finalDirectLink = btn.href;
+                console.log(`🎯 DIRECT MP4 LINK: ${finalDirectLink}`);
+                break;
+            }
+            
+            // Click the button/link
+            if (btn.tagName === 'A') {
+                await page.evaluate((href) => {
+                    const link = document.querySelector(`a[href="${href}"]`);
+                    if (link) {
+                        // Open in new tab
+                        const event = new MouseEvent('click', {
+                            view: window,
+                            bubbles: true,
+                            cancelable: true,
+                            ctrlKey: true
+                        });
+                        link.dispatchEvent(event);
+                    }
+                }, btn.href);
             } else {
-                // Click the button
                 await page.evaluate((text) => {
-                    const allElements = Array.from(document.querySelectorAll('a, button'));
-                    for (const el of allElements) {
+                    const elements = Array.from(document.querySelectorAll('a, button'));
+                    for (const el of elements) {
                         if ((el.innerText || '').toLowerCase().includes(text)) {
                             el.click();
                             break;
                         }
                     }
-                }, buttonInfo.text);
-                buttonClicked = true;
-                console.log("🔘 Clicked button");
-                await delay(5000);
+                }, btn.text);
             }
+            
+            buttonClicked = true;
+            console.log(`🔘 Clicked: "${btn.text}"`);
+            await delay(5000);
         }
         
-        // Method 2: Try to click any element with bot in href
-        if (!finalDirectLink && !buttonClicked) {
+        // If no specific buttons found, try by href pattern
+        if (!buttonClicked && !finalDirectLink) {
+            console.log("🔘 Trying href pattern search...");
+            
             const botLink = await page.evaluate(() => {
                 const links = Array.from(document.querySelectorAll('a'));
-                const botLink = links.find(l => l.href && l.href.includes('bot'));
+                // Find links that look like bot links but not Telegram
+                const botLink = links.find(l => 
+                    l.href && 
+                    l.href.includes('bot') && 
+                    !l.href.includes('t.me') &&
+                    !l.innerText.toLowerCase().includes('telegram')
+                );
                 if (botLink) {
                     botLink.click();
                     return botLink.href;
@@ -307,27 +316,27 @@ async function extractDirectLinkFromSonicCloud(sonicUrl) {
             }
         }
         
-        // Wait for new tabs to appear
-        console.log("⏳ Waiting for new tabs to appear...");
+        // Wait for new tabs
+        console.log("⏳ Waiting for new tabs to load...");
         await delay(8000);
         
-        // Check captured URLs from new tabs
+        // Check captured URLs
         if (capturedUrls.length > 0) {
             console.log(`📊 Captured ${capturedUrls.length} URLs from new tabs`);
             for (const url of capturedUrls) {
-                if (url.includes('.mp4') || url.includes('download')) {
+                // Look for MP4 or bot links (skip Telegram)
+                if ((url.includes('.mp4') || (url.includes('bot') && !url.includes('t.me'))) && !finalDirectLink) {
                     finalDirectLink = url;
                     console.log(`🎯 USING CAPTURED URL: ${finalDirectLink}`);
-                    break;
                 }
             }
         }
         
-        // Check if current page redirected
+        // Check current page URL
         const currentUrl = page.url();
         if (currentUrl !== sonicUrl && !finalDirectLink) {
             console.log(`🔄 Page redirected to: ${currentUrl}`);
-            if (currentUrl.includes('.mp4') || currentUrl.includes('download')) {
+            if (currentUrl.includes('.mp4')) {
                 finalDirectLink = currentUrl;
             }
         }
@@ -337,7 +346,7 @@ async function extractDirectLinkFromSonicCloud(sonicUrl) {
             return { success: true, downloadUrl: finalDirectLink };
         }
         
-        console.log(`⚠️ No direct link found after all attempts`);
+        console.log(`⚠️ No direct link found`);
         return { success: false, error: "Could not extract direct download link" };
 
     } catch (error) {
