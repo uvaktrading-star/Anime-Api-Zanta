@@ -37,8 +37,8 @@ async function getCineSubzDownloadPage(movieUrl) {
             ]
         };
         
-        if (CHROME_PATH) {
-            launchOptions.executablePath = CHROME_PATH;
+        if (HEROKU_CHROME_PATH) {
+            launchOptions.executablePath = HEROKU_CHROME_PATH;
         }
         
         browser = await puppeteer.launch(launchOptions);
@@ -100,8 +100,8 @@ async function extractDirectLinkFromSonicCloud(sonicUrl) {
             ]
         };
         
-        if (CHROME_PATH) {
-            launchOptions.executablePath = CHROME_PATH;
+        if (HEROKU_CHROME_PATH) {
+            launchOptions.executablePath = HEROKU_CHROME_PATH;
         }
         
         browser = await puppeteer.launch(launchOptions);
