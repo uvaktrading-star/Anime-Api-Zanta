@@ -20,38 +20,46 @@ const HEROKU_CHROME_PATH = '/app/.chrome-for-testing/chrome-linux64/chrome';
 
 //----------CINESUBS-----------
 
+const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 async function getCineSubzDownloadPage(movieUrl) {
     let browser;
     try {
         console.log(`🎬 CineSubz: Loading movie page...`);
         
-        const launchOptions = {
+        browser = await puppeteer.launch({
+            executablePath: HEROKU_CHROME_PATH,
             headless: true,
             args: [
                 '--no-sandbox', 
                 '--disable-setuid-sandbox', 
                 '--disable-dev-shm-usage',
-                '--disable-blink-features=AutomationControlled',
-                '--disable-web-security',
-                '--disable-features=IsolateOrigins,site-per-process'
+                '--disable-blink-features=AutomationControlled'
             ]
-        };
-        
-        if (HEROKU_CHROME_PATH) {
-            launchOptions.executablePath = HEROKU_CHROME_PATH;
-        }
-        
-        browser = await puppeteer.launch(launchOptions);
+        });
 
         const page = await browser.newPage();
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36');
         
-        page.setDefaultTimeout(60000);
-        page.setDefaultNavigationTimeout(60000);
+        page.setDefaultTimeout(30000);
+        page.setDefaultNavigationTimeout(30000);
 
-        await page.goto(movieUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+        // Block ads and unnecessary resources
+        await page.setRequestInterception(true);
+        page.on('request', (request) => {
+            const url = request.url();
+            if (url.includes('googleads') || url.includes('doubleclick') || 
+                url.includes('popads') || url.includes('adstudio') ||
+                url.includes('googlesyndication')) {
+                request.abort();
+            } else {
+                request.continue();
+            }
+        });
+
+        await page.goto(movieUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
         
-        await page.waitForSelector('#link, a[href*="sonic-cloud"]', { timeout: 30000 });
+        // Wait for the download button
+        await page.waitForSelector('#link, a[href*="sonic-cloud"]', { timeout: 15000 });
         
         let downloadPageUrl = await page.evaluate(() => {
             const linkElement = document.querySelector('#link');
@@ -90,7 +98,8 @@ async function extractDirectLinkFromSonicCloud(sonicUrl) {
     try {
         console.log(`☁️ Sonic-Cloud: Extracting direct link from ${sonicUrl}`);
         
-        const launchOptions = {
+        browser = await puppeteer.launch({
+            executablePath: HEROKU_CHROME_PATH,
             headless: true,
             args: [
                 '--no-sandbox', 
@@ -98,136 +107,188 @@ async function extractDirectLinkFromSonicCloud(sonicUrl) {
                 '--disable-dev-shm-usage',
                 '--disable-blink-features=AutomationControlled'
             ]
-        };
-        
-        if (HEROKU_CHROME_PATH) {
-            launchOptions.executablePath = HEROKU_CHROME_PATH;
-        }
-        
-        browser = await puppeteer.launch(launchOptions);
+        });
 
         const page = await browser.newPage();
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36');
         
-        let capturedRequests = [];
         let finalDirectLink = null;
+        let buttonClicked = false;
 
+        // --- Block ads and capture requests ---
         await page.setRequestInterception(true);
         
         page.on('request', (request) => {
             const url = request.url();
             const method = request.method();
             
+            // Log all requests
             console.log(`🌐 [${method}] ${url.substring(0, 100)}`);
             
-            capturedRequests.push({
-                url: url,
-                method: method,
-                timestamp: Date.now()
-            });
-            
-            if (url.includes('.mp4') || url.includes('.mkv') || url.includes('.webm') || 
-                (url.includes('download') && (url.includes('sonic-cloud') || url.includes('bot3')))) {
+            // Capture download links
+            if (url.includes('.mp4') || url.includes('.mkv') || url.includes('.webm')) {
                 finalDirectLink = url;
-                console.log(`🎯 CAPTURED DIRECT LINK: ${url}`);
+                console.log(`🎯 CAPTURED MP4: ${url}`);
             }
             
-            if (url.includes('googleads') || url.includes('doubleclick') || url.includes('popads')) {
+            // Capture API responses
+            if (url.includes('download-data') || url.includes('get_link') || url.includes('get-file')) {
+                finalDirectLink = url;
+                console.log(`🎯 CAPTURED API LINK: ${url}`);
+            }
+            
+            // Block ads
+            if (url.includes('googleads') || url.includes('doubleclick') || 
+                url.includes('popads') || url.includes('adstudio') ||
+                url.includes('googlesyndication')) {
                 request.abort();
             } else {
                 request.continue();
             }
         });
 
+        // Capture responses for redirects
         page.on('response', async (response) => {
             const url = response.url();
             const status = response.status();
             
             if (url.includes('.mp4') || url.includes('.mkv')) {
                 finalDirectLink = url;
-                console.log(`🎯 RESPONSE CAPTURED: ${url}`);
+                console.log(`🎯 RESPONSE MP4: ${url}`);
             }
             
             if (status >= 300 && status < 400) {
                 const location = response.headers()['location'];
                 if (location && (location.includes('.mp4') || location.includes('download'))) {
                     finalDirectLink = location;
-                    console.log(`🎯 REDIRECT CAPTURED: ${location}`);
+                    console.log(`🎯 REDIRECT: ${location}`);
                 }
             }
         });
 
+        // Navigate to page
         console.log("📄 Loading sonic-cloud page...");
-        await page.goto(sonicUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+        await page.goto(sonicUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
         
-        await page.waitForTimeout(3000);
+        // Wait for page to load
+        await delay(2000);
         
-        // Try to click download buttons
-        await page.evaluate(() => {
-            const allButtons = Array.from(document.querySelectorAll('a, button'));
-            for (const btn of allButtons) {
-                const text = (btn.innerText || '').toLowerCase();
-                if (text.includes('download') || text.includes('get link') || text.includes('direct')) {
-                    console.log(`Found button: ${btn.innerText}`);
-                    btn.click();
-                    break;
-                }
+        // Try multiple selectors for download button
+        const buttonSelectors = [
+            'a:contains("Direct Download")',
+            'a:contains("Direct")',
+            'a:contains("Download")',
+            'button:contains("Direct Download")',
+            'button:contains("Download")',
+            '.download-btn',
+            '.btn-download',
+            '#download-btn',
+            'a[href*="download"]',
+            'button[onclick*="download"]',
+            'a.direct-download',
+            'button.direct-download'
+        ];
+        
+        // Click any download button found
+        for (const selector of buttonSelectors) {
+            if (finalDirectLink) break;
+            
+            const buttonExists = await page.evaluate((sel) => {
+                const element = document.querySelector(sel);
+                return !!element;
+            }, selector).catch(() => false);
+            
+            if (buttonExists) {
+                console.log(`🔘 Clicking button: ${selector}`);
+                buttonClicked = true;
+                
+                await page.evaluate((sel) => {
+                    const btn = document.querySelector(sel);
+                    if (btn) btn.click();
+                }, selector);
+                
+                await delay(3000);
             }
-        });
+        }
         
-        console.log("⏳ Waiting for network requests (15 seconds)...");
-        await page.waitForTimeout(15000);
+        // If no specific button, try clicking any button with download text
+        if (!buttonClicked && !finalDirectLink) {
+            await page.evaluate(() => {
+                const buttons = Array.from(document.querySelectorAll('a, button'));
+                for (const btn of buttons) {
+                    const text = (btn.innerText || '').toLowerCase();
+                    if (text.includes('download') || text.includes('direct') || text.includes('get link')) {
+                        btn.click();
+                        break;
+                    }
+                }
+            });
+            await delay(3000);
+        }
         
-        // Check page content for any links
-        const pageLinks = await page.evaluate(() => {
-            const links = Array.from(document.querySelectorAll('a'));
-            const downloadLinks = links.filter(l => 
-                l.href && (l.href.includes('.mp4') || l.href.includes('download') || l.href.includes('get'))
-            );
-            return downloadLinks.map(l => l.href);
-        });
+        // Wait for network requests (max 15 seconds)
+        console.log("⏳ Waiting for network requests...");
+        const maxWaitTime = 15000;
+        const startTime = Date.now();
         
-        if (pageLinks.length > 0) {
-            console.log(`📎 Found ${pageLinks.length} links in page`);
+        while (!finalDirectLink && (Date.now() - startTime) < maxWaitTime) {
+            await delay(500);
+            
+            // Check page for any new links
+            const pageLinks = await page.evaluate(() => {
+                const links = Array.from(document.querySelectorAll('a'));
+                return links.filter(l => l.href && (l.href.includes('.mp4') || l.href.includes('download') || l.href.includes('get'))).map(l => l.href);
+            });
+            
             for (const link of pageLinks) {
                 if (!finalDirectLink && (link.includes('.mp4') || link.includes('download'))) {
                     finalDirectLink = link;
                     console.log(`🎯 LINK FROM PAGE: ${link}`);
                 }
             }
-        }
-        
-        const potentialLinks = capturedRequests.filter(req => 
-            req.url.includes('.mp4') || 
-            req.url.includes('.mkv') || 
-            req.url.includes('download') ||
-            req.url.includes('get_file')
-        );
-        
-        if (potentialLinks.length > 0) {
-            console.log(`📊 Found ${potentialLinks.length} potential links in network requests`);
-            for (const req of potentialLinks) {
-                if (!finalDirectLink) {
-                    finalDirectLink = req.url;
-                }
+            
+            // Check for iframe sources
+            const iframeSrc = await page.evaluate(() => {
+                const iframe = document.querySelector('iframe');
+                return iframe ? iframe.src : null;
+            });
+            
+            if (iframeSrc && (iframeSrc.includes('.mp4') || iframeSrc.includes('download'))) {
+                finalDirectLink = iframeSrc;
+                console.log(`🎯 IFRAME SOURCE: ${iframeSrc}`);
             }
         }
         
         if (finalDirectLink) {
             console.log(`✅ Final direct link: ${finalDirectLink}`);
-            return { 
-                success: true, 
-                downloadUrl: finalDirectLink,
-                networkRequests: capturedRequests.slice(0, 20)
-            };
+            return { success: true, downloadUrl: finalDirectLink };
         }
         
-        console.log(`⚠️ No direct link found, returning sonic page URL`);
+        // If no link found, try to get from the page's API endpoint
+        console.log("⚠️ Trying API endpoint...");
+        try {
+            const apiUrl = sonicUrl.replace('/server6/', '/api/download-data/');
+            const apiResponse = await axios.get(apiUrl, {
+                headers: { 'User-Agent': 'Mozilla/5.0' },
+                timeout: 10000
+            });
+            if (apiResponse.data && apiResponse.data.url) {
+                finalDirectLink = apiResponse.data.url;
+                console.log(`🎯 API RESPONSE: ${finalDirectLink}`);
+            }
+        } catch (e) {
+            console.log("API endpoint failed");
+        }
+        
+        if (finalDirectLink) {
+            return { success: true, downloadUrl: finalDirectLink };
+        }
+        
+        console.log(`⚠️ No direct link found`);
         return { 
-            success: true, 
-            downloadUrl: sonicUrl,
-            note: "Direct link not captured. Try opening this URL in browser.",
-            networkRequests: capturedRequests.slice(0, 20)
+            success: false, 
+            error: "Could not extract direct download link",
+            sonicUrl: sonicUrl
         };
 
     } catch (error) {
@@ -238,16 +299,24 @@ async function extractDirectLinkFromSonicCloud(sonicUrl) {
     }
 }
 
-// --- Main CineSubz Download Function ---
+// --- Main CineSubz Download Function (Optimized for 30s) ---
 async function downloadFromCineSubz(cinesubzUrl) {
     const startTime = Date.now();
+    const MAX_EXECUTION_TIME = 28000; // 28 seconds max (leave 2s for response)
     
     try {
+        // Step 1: Get the intermediate download page URL
         const step1 = await getCineSubzDownloadPage(cinesubzUrl);
         if (!step1.success) {
             return { success: false, error: step1.error, executionTime: Date.now() - startTime };
         }
         
+        // Check time
+        if (Date.now() - startTime > MAX_EXECUTION_TIME) {
+            return { success: false, error: "Timeout: Step 1 took too long", executionTime: Date.now() - startTime };
+        }
+        
+        // Step 2: Extract direct link from sonic-cloud page
         const step2 = await extractDirectLinkFromSonicCloud(step1.downloadPageUrl);
         
         return {
@@ -255,7 +324,6 @@ async function downloadFromCineSubz(cinesubzUrl) {
             originalUrl: cinesubzUrl,
             downloadPageUrl: step1.downloadPageUrl,
             directDownloadUrl: step2.downloadUrl || null,
-            networkRequests: step2.networkRequests || [],
             executionTime: Date.now() - startTime,
             error: step2.error || null
         };
