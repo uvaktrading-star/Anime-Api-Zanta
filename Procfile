@@ -1,1 +1,1 @@
-web: node index.js --timeout 120000
+web: npm start --timeout 120000
