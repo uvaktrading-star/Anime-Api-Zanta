@@ -13,8 +13,291 @@ const jar = new CookieJar();
 const client = wrapper(axios.create({ jar }));
 const BASE_URL = "https://fitgirl-repacks.site";
 const ANIME_BASE = "https://animeheaven.me";
+const CINESUBZ_BASE = "https://cinesubz.lk";
 const CARTOONS_BASE = "https://cartoons.lk";
 const HEROKU_CHROME_PATH = '/app/.chrome-for-testing/chrome-linux64/chrome';
+
+
+//----------CINESUBS-----------
+
+async function getCineSubzDownloadPage(movieUrl) {
+    let browser;
+    try {
+        console.log(`🎬 CineSubz: Loading movie page...`);
+        
+        browser = await puppeteer.launch({
+            executablePath: HEROKU_CHROME_PATH,
+            headless: true,
+            args: [
+                '--no-sandbox', 
+                '--disable-setuid-sandbox', 
+                '--disable-dev-shm-usage',
+                '--disable-blink-features=AutomationControlled'
+            ]
+        });
+
+        const page = await browser.newPage();
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36');
+        
+        // Set extra headers to avoid detection
+        await page.setExtraHTTPHeaders({
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Referer': CINESUBZ_BASE
+        });
+
+        let downloadPageUrl = null;
+        let adPageClosed = false;
+
+        // --- Close any popup ads automatically ---
+        browser.on('targetcreated', async (target) => {
+            const newPage = await target.page();
+            if (newPage) {
+                const url = newPage.url();
+                // Close any page that is not the main domain (ads)
+                if (!url.includes('cinesubz.lk') && !url.includes('sonic-cloud.online')) {
+                    console.log(`🛑 Closing ad page: ${url.substring(0, 50)}...`);
+                    await newPage.close().catch(() => {});
+                    adPageClosed = true;
+                }
+            }
+        });
+
+        // --- Intercept requests to capture the download page link ---
+        await page.setRequestInterception(true);
+        page.on('request', (request) => {
+            const url = request.url();
+            // Allow main requests, block ads
+            if (url.includes('googleads') || url.includes('doubleclick') || url.includes('popads')) {
+                request.abort();
+            } else {
+                request.continue();
+            }
+        });
+
+        // Navigate to the movie page
+        await page.goto(movieUrl, { waitUntil: 'networkidle2', timeout: 30000 });
+        
+        // Wait for the download button to appear
+        await page.waitForSelector('#link', { timeout: 15000 }).catch(() => {
+            console.log("⏳ Waiting for #link selector...");
+        });
+
+        // Get the href from the "Go to Download Page" button
+        downloadPageUrl = await page.evaluate(() => {
+            const linkElement = document.querySelector('#link');
+            if (linkElement && linkElement.href) {
+                return linkElement.href;
+            }
+            return null;
+        });
+
+        if (!downloadPageUrl) {
+            // Try alternative selector
+            downloadPageUrl = await page.evaluate(() => {
+                const link = Array.from(document.querySelectorAll('a')).find(a => 
+                    a.innerText.includes('Go to Download Page') || 
+                    a.innerText.includes('Download Page')
+                );
+                return link ? link.href : null;
+            });
+        }
+
+        if (!downloadPageUrl) {
+            throw new Error("Could not find 'Go to Download Page' button");
+        }
+
+        console.log(`✅ Found download page URL: ${downloadPageUrl}`);
+        return { success: true, downloadPageUrl: downloadPageUrl };
+
+    } catch (error) {
+        console.error("CineSubz Step 1 Error:", error.message);
+        return { success: false, error: error.message };
+    } finally {
+        if (browser) await browser.close();
+    }
+}
+
+// --- Step 2: Extract the final direct download link from the sonic-cloud page ---
+async function extractDirectLinkFromSonicCloud(sonicUrl) {
+    let browser;
+    try {
+        console.log(`☁️ Sonic-Cloud: Extracting direct link from ${sonicUrl}`);
+        
+        browser = await puppeteer.launch({
+            executablePath: HEROKU_CHROME_PATH,
+            headless: true,
+            args: [
+                '--no-sandbox', 
+                '--disable-setuid-sandbox', 
+                '--disable-dev-shm-usage',
+                '--disable-blink-features=AutomationControlled'
+            ]
+        });
+
+        const page = await browser.newPage();
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36');
+        
+        let finalDirectLink = null;
+        let directButtonClicked = false;
+
+        // --- Close popup ads ---
+        browser.on('targetcreated', async (target) => {
+            const newPage = await target.page();
+            if (newPage && newPage.url() !== sonicUrl) {
+                const url = newPage.url();
+                if (!url.includes('sonic-cloud.online')) {
+                    console.log(`🛑 Closing popup: ${url.substring(0, 60)}...`);
+                    await newPage.close().catch(() => {});
+                }
+            }
+        });
+
+        // --- Intercept responses to capture the final MP4 link ---
+        await page.setRequestInterception(true);
+        page.on('response', async (response) => {
+            const url = response.url();
+            // Capture MP4 files
+            if (url.includes('.mp4') || url.includes('.mkv') || url.includes('.webm')) {
+                finalDirectLink = url;
+                console.log(`🎯 Captured direct link: ${url}`);
+            }
+        });
+
+        // Navigate to the sonic-cloud page
+        await page.goto(sonicUrl, { waitUntil: 'networkidle2', timeout: 30000 });
+        
+        // Wait for content to load
+        await page.waitForTimeout(3000);
+        
+        // Check for "Direct Download" button and click it
+        const hasDirectButton = await page.evaluate(() => {
+            const buttons = Array.from(document.querySelectorAll('a, button'));
+            const directBtn = buttons.find(btn => 
+                btn.innerText.toLowerCase().includes('direct download') ||
+                btn.innerText.toLowerCase().includes('download now') ||
+                btn.innerText.toLowerCase().includes('download')
+            );
+            return !!directBtn;
+        });
+
+        if (hasDirectButton) {
+            console.log("🔘 Clicking 'Direct Download' button...");
+            
+            // Click the button and wait for new page/tab
+            const [newPage] = await Promise.all([
+                new Promise(resolve => browser.once('targetcreated', async (target) => {
+                    const newPageTarget = await target.page();
+                    resolve(newPageTarget);
+                })),
+                page.evaluate(() => {
+                    const buttons = Array.from(document.querySelectorAll('a, button'));
+                    const directBtn = buttons.find(btn => 
+                        btn.innerText.toLowerCase().includes('direct download') ||
+                        btn.innerText.toLowerCase().includes('download now')
+                    );
+                    if (directBtn) directBtn.click();
+                })
+            ]);
+            
+            directButtonClicked = true;
+            
+            if (newPage) {
+                await newPage.waitForTimeout(2000);
+                const newPageUrl = newPage.url();
+                if (newPageUrl.includes('.mp4') || newPageUrl.includes('download')) {
+                    finalDirectLink = newPageUrl;
+                }
+                await newPage.close().catch(() => {});
+            }
+        }
+        
+        // If direct link not captured yet, try to extract from page source
+        if (!finalDirectLink) {
+            finalDirectLink = await page.evaluate(() => {
+                // Look for video source
+                const video = document.querySelector('video');
+                if (video && video.src) return video.src;
+                
+                // Look for download links
+                const links = Array.from(document.querySelectorAll('a'));
+                const downloadLink = links.find(l => 
+                    l.href && (l.href.includes('.mp4') || l.href.includes('download'))
+                );
+                if (downloadLink) return downloadLink.href;
+                
+                // Look for iframe sources
+                const iframe = document.querySelector('iframe');
+                if (iframe && iframe.src) return iframe.src;
+                
+                return null;
+            });
+        }
+
+        // If still no link, try to wait for redirect
+        if (!finalDirectLink) {
+            console.log("⏳ Waiting for redirect or link generation...");
+            await page.waitForTimeout(8000);
+            
+            finalDirectLink = await page.evaluate(() => {
+                // Check if page redirected
+                if (window.location.href.includes('.mp4')) return window.location.href;
+                
+                // Check all anchor tags again
+                const allLinks = Array.from(document.querySelectorAll('a'));
+                for (const link of allLinks) {
+                    if (link.href && (link.href.includes('.mp4') || link.href.includes('download'))) {
+                        return link.href;
+                    }
+                }
+                return null;
+            });
+        }
+
+        if (finalDirectLink) {
+            console.log(`✅ Final direct link captured: ${finalDirectLink}`);
+            return { success: true, downloadUrl: finalDirectLink };
+        } else {
+            // If we couldn't capture, return the sonic page URL as fallback
+            return { 
+                success: true, 
+                downloadUrl: sonicUrl,
+                note: "Direct link not found, but you can try opening this URL in browser"
+            };
+        }
+
+    } catch (error) {
+        console.error("Sonic-Cloud Extraction Error:", error.message);
+        return { success: false, error: error.message };
+    } finally {
+        if (browser) await browser.close();
+    }
+}
+
+// --- Main CineSubz Download Function ---
+async function downloadFromCineSubz(cinesubzUrl) {
+    try {
+        // Step 1: Get the intermediate download page URL
+        const step1 = await getCineSubzDownloadPage(cinesubzUrl);
+        if (!step1.success) {
+            return { success: false, error: step1.error };
+        }
+        
+        // Step 2: Extract direct link from sonic-cloud page
+        const step2 = await extractDirectLinkFromSonicCloud(step1.downloadPageUrl);
+        
+        return {
+            success: step2.success,
+            originalUrl: cinesubzUrl,
+            downloadPageUrl: step1.downloadPageUrl,
+            directDownloadUrl: step2.downloadUrl || null,
+            error: step2.error || null
+        };
+        
+    } catch (error) {
+        console.error("CineSubz Main Error:", error.message);
+        return { success: false, error: error.message };
+    }
+}
 
 //--------FITGIRL REPACK---------
 // --- 1. Search Games ---
@@ -515,6 +798,23 @@ app.get('/api/cartoons/download', async (req, res) => {
     if (!url) return res.json({ success: false, error: "Cartoon URL required" });
     res.json(await getCartoonDownload(url));
 });
+
+app.get('/api/cinesubz/download', async (req, res) => {
+    const url = req.query.url;
+    if (!url) {
+        return res.json({ success: false, error: "URL parameter required" });
+    }
+    
+    // Validate URL
+    if (!url.includes('cinesubz.lk')) {
+        return res.json({ success: false, error: "Invalid CineSubz URL" });
+    }
+    
+    console.log(`📥 CineSubz Download Request: ${url}`);
+    const result = await downloadFromCineSubz(url);
+    res.json(result);
+});
+
 
 app.get('/api/anime/search', async (req, res) => res.json(await searchAnime(req.query.q)));
 app.get('/api/anime/episodes', async (req, res) => res.json(await getEpisodes(req.query.url)));
