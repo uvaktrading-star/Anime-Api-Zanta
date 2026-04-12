@@ -20,7 +20,7 @@ const HEROKU_CHROME_PATH = '/app/.chrome-for-testing/chrome-linux64/chrome';
 async function sniperGDrive(driveUrl) {
     let browser;
     try {
-        console.log(`[${new Date().toISOString()}] 🔍 Sniper Initiated: ${driveUrl}`);
+        console.log(`[${new Date().toISOString()}] 🚀 Advanced Token Sniping Started...`);
         
         browser = await puppeteer.launch({
             executablePath: HEROKU_CHROME_PATH,
@@ -31,50 +31,52 @@ async function sniperGDrive(driveUrl) {
         const page = await browser.newPage();
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36');
 
-        // Navigation timeout එක වැඩි කරමු
-        await page.goto(driveUrl, { waitUntil: 'networkidle0', timeout: 60000 });
+        // URL එකේ අන්තිම අකුරු ටික හරියට තියෙනවද බලමු
+        let targetUrl = driveUrl.includes('confirm=t') ? driveUrl : driveUrl + "&confirm=t";
 
-        console.log("Step 1: Page Loaded. Checking for forms...");
+        await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 60000 });
 
-        // පොඩි වෙලාවක් ඉමු JS ටික රන් වෙන්න
-        await new Promise(r => setTimeout(r, 2000));
+        // 🎯 පියවර 1: 'at' token එක ලැබෙනකම් උපරිම තත්පර 5ක් බලාගෙන ඉන්නවා
+        console.log("Waiting for hidden tokens to appear...");
+        let tokenData = null;
 
-        // 🎯 Form එක හොයන ලොජික් එක සහ Debugging
-        const result = await page.evaluate(() => {
-            const form = document.querySelector('form[action*="download"]');
-            if (!form) {
-                return { error: "FORM_NOT_FOUND", html: document.body.innerText.substring(0, 100) };
-            }
-
-            const data = {};
-            const inputs = form.querySelectorAll('input');
-            inputs.forEach(input => {
-                if (input.name) data[input.name] = input.value;
+        for (let i = 0; i < 10; i++) {
+            tokenData = await page.evaluate(() => {
+                const atInput = document.querySelector('input[name="at"]');
+                const form = document.querySelector('form[action*="download"]');
+                
+                if (atInput && atInput.value) {
+                    const data = {};
+                    const inputs = form.querySelectorAll('input');
+                    inputs.forEach(ins => { if(ins.name) data[ins.name] = ins.value; });
+                    
+                    return {
+                        action: form.getAttribute('action'),
+                        params: data
+                    };
+                }
+                return null;
             });
 
-            return {
-                success: true,
-                action: form.getAttribute('action') || "https://drive.usercontent.google.com/download",
-                params: data
+            if (tokenData) break;
+            await new Promise(r => setTimeout(r, 500)); // මිලි තත්පර 500ක් ඉන්නවා
+        }
+
+        if (tokenData && tokenData.params.at) {
+            // 🎯 පියවර 2: ඔක්කොම tokens එකතු කරලා final link එක හදනවා
+            const finalUrl = new URL(tokenData.action);
+            Object.keys(tokenData.params).forEach(key => {
+                finalUrl.searchParams.set(key, tokenData.params[key]);
+            });
+
+            console.log("✅ Success! Token Sniped: " + tokenData.params.at.substring(0, 10) + "...");
+            return { 
+                success: true, 
+                download_url: finalUrl.toString() 
             };
-        });
-
-        if (result.success) {
-            const finalUrl = new URL(result.action);
-            Object.keys(result.params).forEach(key => {
-                finalUrl.searchParams.set(key, result.params[key]);
-            });
-
-            // අනිවාර්යයෙන් confirm=t තියෙන්න ඕනේ
-            if (!finalUrl.searchParams.has('confirm')) {
-                finalUrl.searchParams.set('confirm', 't');
-            }
-
-            console.log("✅ Success! Form tokens captured.");
-            return { success: true, download_url: finalUrl.toString() };
         } else {
-            console.log(`❌ Debug Info: ${result.error}. Content: ${result.html}`);
-            throw new Error(`Google Form not found on page. Content: ${result.html}`);
+            // බැරිම වුණොත් පේජ් එකේ screenshot එකක් ගන්නත් පුළුවන් debug කරන්න
+            throw new Error("Could not find the 'at' security token. Google might be blocking the request.");
         }
 
     } catch (e) {
