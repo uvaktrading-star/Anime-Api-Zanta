@@ -20,8 +20,6 @@ const HEROKU_CHROME_PATH = '/app/.chrome-for-testing/chrome-linux64/chrome';
 async function sniperGDrive(driveUrl) {
     let browser;
     try {
-        console.log(`[${new Date().toISOString()}] 🚀 Advanced Token Sniping Started...`);
-        
         browser = await puppeteer.launch({
             executablePath: HEROKU_CHROME_PATH,
             headless: true,
@@ -31,56 +29,47 @@ async function sniperGDrive(driveUrl) {
         const page = await browser.newPage();
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36');
 
-        // URL එකේ අන්තිම අකුරු ටික හරියට තියෙනවද බලමු
-        let targetUrl = driveUrl.includes('confirm=t') ? driveUrl : driveUrl + "&confirm=t";
+        // 🎯 1. පේජ් එකට යනවා. networkidle0 දාන්නේ රික්වෙස්ට් ඔක්කොම ඉවර වෙනකම් බලන්න.
+        await page.goto(driveUrl, { waitUntil: 'networkidle0' });
 
-        await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 60000 });
+        // 🎯 2. 'at' ටෝකන් එක එනකම් විතරක් බලන් ඉන්නවා (මේක මයික්‍රෝ තත්පර ගාණක් වෙන්නත් පුළුවන්)
+        await page.waitForSelector('input[name="at"]', { timeout: 5000 });
 
-        // 🎯 පියවර 1: 'at' token එක ලැබෙනකම් උපරිම තත්පර 5ක් බලාගෙන ඉන්නවා
-        console.log("Waiting for hidden tokens to appear...");
-        let tokenData = null;
-
-        for (let i = 0; i < 10; i++) {
-            tokenData = await page.evaluate(() => {
-                const atInput = document.querySelector('input[name="at"]');
-                const form = document.querySelector('form[action*="download"]');
-                
-                if (atInput && atInput.value) {
-                    const data = {};
-                    const inputs = form.querySelectorAll('input');
-                    inputs.forEach(ins => { if(ins.name) data[ins.name] = ins.value; });
-                    
-                    return {
-                        action: form.getAttribute('action'),
-                        params: data
-                    };
-                }
-                return null;
+        // 🎯 3. සම්පූර්ණ ෆෝම් දත්ත ටික එකපාර අරගන්නවා
+        const formDetails = await page.evaluate(() => {
+            const form = document.querySelector('#download-form');
+            if (!form) return null;
+            
+            const inputs = Array.from(form.querySelectorAll('input'));
+            const params = {};
+            inputs.forEach(input => {
+                if (input.name) params[input.name] = input.value;
             });
 
-            if (tokenData) break;
-            await new Promise(r => setTimeout(r, 500)); // මිලි තත්පර 500ක් ඉන්නවා
-        }
+            return {
+                action: form.getAttribute('action'),
+                params: params
+            };
+        });
 
-        if (tokenData && tokenData.params.at) {
-            // 🎯 පියවර 2: ඔක්කොම tokens එකතු කරලා final link එක හදනවා
-            const finalUrl = new URL(tokenData.action);
-            Object.keys(tokenData.params).forEach(key => {
-                finalUrl.searchParams.set(key, tokenData.params[key]);
+        if (formDetails && formDetails.params.at) {
+            const finalLink = new URL(formDetails.action);
+            Object.keys(formDetails.params).forEach(key => {
+                finalLink.searchParams.set(key, formDetails.params[key]);
             });
 
-            console.log("✅ Success! Token Sniped: " + tokenData.params.at.substring(0, 10) + "...");
+            // Direct link එක ඕන නිසා confirm=t අනිවාර්යයෙන්ම තියෙන්න ඕනේ
+            finalLink.searchParams.set('confirm', 't');
+
             return { 
                 success: true, 
-                download_url: finalUrl.toString() 
+                download_url: finalLink.toString() 
             };
         } else {
-            // බැරිම වුණොත් පේජ් එකේ screenshot එකක් ගන්නත් පුළුවන් debug කරන්න
-            throw new Error("Could not find the 'at' security token. Google might be blocking the request.");
+            throw new Error("Token generation failed.");
         }
 
     } catch (e) {
-        console.error("❌ ERROR:", e.message);
         return { success: false, error: e.message };
     } finally {
         if (browser) await browser.close();
