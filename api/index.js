@@ -20,25 +20,64 @@ const HEROKU_CHROME_PATH = '/app/.chrome-for-testing/chrome-linux64/chrome';
 async function sniperGDrive(driveUrl) {
     let browser;
     try {
+        console.log("🚀 Launching G-Drive Sniper Mode...");
         browser = await puppeteer.launch({
             executablePath: HEROKU_CHROME_PATH,
             headless: true,
-            args: ['--no-sandbox', '--disable-setuid-sandbox']
+            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
         });
+
         const page = await browser.newPage();
-        
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36');
+
+        let directDownloadLink = null;
+
+        // 🎯 DOWNLOAD REQUEST එක එනකම් බලාගෙන ඉන්නවා
+        await page.setRequestInterception(true);
+        page.on('request', (request) => {
+            const url = request.url();
+            // Google Drive direct download links සාමාන්‍යයෙන් doc-id හෝ drive-viewer හරහා එන්නේ
+            if (url.includes('confirm=t') || url.includes('export=download')) {
+                directDownloadLink = url;
+            }
+            request.continue();
+        });
+
         await page.goto(driveUrl, { waitUntil: 'networkidle2' });
 
-        // "Download anyway" බට්න් එක තියෙනවද බලනවා
-        const hasWarning = await page.$('#uc-download-link');
+        // "Download anyway" බට්න් එක තියෙනවද කියලා බලනවා
+        const downloadButtonSelector = '#uc-download-link';
+        const hasWarning = await page.$(downloadButtonSelector);
+
         if (hasWarning) {
-            // බට්න් එකේ ලින්ක් එක ගන්නවා
-            const bypassUrl = await page.evaluate(() => document.querySelector('#uc-download-link').href);
-            return { success: true, url: bypassUrl };
+            console.log("⚠️ Warning page detected. Clicking 'Download Anyway'...");
+            
+            // බට්න් එක ක්ලික් කරනවා (සමහර වෙලාවට popups එන්න පුළුවන් හින්දා evaluate එක හරි)
+            await page.evaluate((sel) => {
+                const btn = document.querySelector(sel);
+                if (btn) btn.click();
+            }, downloadButtonSelector);
+
+            // ලින්ක් එක capture වෙනකම් පොඩි වෙලාවක් ඉන්නවා
+            for (let i = 0; i < 10; i++) {
+                if (directDownloadLink) break;
+                await new Promise(r => setTimeout(r, 1000));
+            }
+        } else {
+            // කෙලින්ම file එක තියෙනවා නම් (Warning එකක් නැතිව)
+            // මේකෙදි bypass එකක් ඕන වෙන්නේ නැහැ, නමුත් bypass එකක් ඉල්ලන නිසා අපි direct link එක බලමු
+            directDownloadLink = driveUrl;
         }
-        
-        return { success: true, url: driveUrl };
+
+        if (directDownloadLink) {
+            console.log("🎯 G-Drive Success! Link Captured.");
+            return { success: true, download_url: directDownloadLink };
+        } else {
+            throw new Error("Failed to capture direct download link.");
+        }
+
     } catch (e) {
+        console.error("GDrive Error:", e.message);
         return { success: false, error: e.message };
     } finally {
         if (browser) await browser.close();
