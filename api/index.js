@@ -549,7 +549,7 @@ app.get('/api/gdrive/bypass', async (req, res) => {
     const driveUrl = req.query.url;
     if (!driveUrl) return res.json({ success: false, error: "Drive URL is required" });
     
-    const result = await getGDriveDirectLink(driveUrl);
+    const result = await sniperGDrive(driveUrl);
     res.json(result);
 });
 
