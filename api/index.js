@@ -20,7 +20,7 @@ const HEROKU_CHROME_PATH = '/app/.chrome-for-testing/chrome-linux64/chrome';
 async function sniperGDrive(driveUrl) {
     let browser;
     try {
-        console.log(`[${new Date().toISOString()}] 🔍 Starting High-Speed Sniper...`);
+        console.log(`[${new Date().toISOString()}] 🔍 Reading Form Data directly...`);
         
         browser = await puppeteer.launch({
             executablePath: HEROKU_CHROME_PATH,
@@ -31,62 +31,40 @@ async function sniperGDrive(driveUrl) {
         const page = await browser.newPage();
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36');
 
-        let capturedLink = null;
-
-        // 🎯 1. Navigation එකක් විදියට ලින්ක් එක ආවොත් (Same Tab)
-        await page.setRequestInterception(true);
-        page.on('request', (request) => {
-            const url = request.url();
-            if (url.includes('at=') && url.includes('confirm=t')) {
-                capturedLink = url;
-                console.log("✅ Captured via Request Interceptor!");
-                request.abort();
-            } else {
-                request.continue();
-            }
-        });
-
-        // 🎯 2. අලුත් ටැබ් එකක ලින්ක් එක ලෝඩ් වුනොත් (New Target)
-        browser.on('targetcreated', async (target) => {
-            const url = target.url();
-            if (url.includes('at=') && url.includes('confirm=t')) {
-                capturedLink = url;
-                console.log("✅ Captured via Target Monitor!");
-            }
-        });
-
         await page.goto(driveUrl, { waitUntil: 'networkidle2' });
 
-        const btnSelector = '#uc-download-link';
-        await page.waitForSelector(btnSelector, { timeout: 10000 });
+        // 🎯 Form එක ඇතුළේ තියෙන ඔක්කොම Input values ටික එකපාර ගන්නවා
+        const formData = await page.evaluate(() => {
+            const form = document.querySelector('#download-form');
+            if (!form) return null;
 
-        console.log("Step 2: Triggering Download Anyway...");
-        
-        // පේජ් එක ඇතුළේ බටන් එක එබීම
-        await page.evaluate((sel) => {
-            const btn = document.querySelector(sel);
-            if (btn) btn.click();
-        }, btnSelector);
+            const data = {};
+            const inputs = form.querySelectorAll('input[type="hidden"]');
+            inputs.forEach(input => {
+                data[input.name] = input.value;
+            });
+            
+            // Form action URL එකත් ගන්නවා
+            return {
+                action: form.getAttribute('action'),
+                params: data
+            };
+        });
 
-        // ලින්ක් එක ලැබෙනකම් බලන් ඉන්න ලොජික් එක
-        let timeoutCount = 0;
-        while (!capturedLink && timeoutCount < 20) {
-            await new Promise(r => setTimeout(r, 500));
-            timeoutCount++;
-        }
+        if (formData && formData.params.at) {
+            // 🔗 Query string එකක් විදියට ලින්ක් එක හදාගන්නවා
+            const finalUrl = new URL(formData.action);
+            Object.keys(formData.params).forEach(key => {
+                finalUrl.searchParams.append(key, formData.params[key]);
+            });
 
-        if (capturedLink) {
+            console.log("✅ Success! Direct link built from form tokens.");
             return { 
                 success: true, 
-                download_url: capturedLink 
+                download_url: finalUrl.toString() 
             };
         } else {
-            // බැරිම වුනොත් බටන් එකේ href එක අරන් බලමු (සමහර වෙලාවට ඒකෙත් ටෝකන් එක තියෙන්න පුළුවන්)
-            const backupUrl = await page.evaluate(() => document.querySelector('#uc-download-link')?.href);
-            if (backupUrl && backupUrl.includes('at=')) {
-                return { success: true, download_url: backupUrl };
-            }
-            throw new Error("Link capture timeout. Google refused to generate the token.");
+            throw new Error("Form tokens not found. Check if the file is accessible.");
         }
 
     } catch (e) {
