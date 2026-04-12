@@ -20,7 +20,7 @@ const HEROKU_CHROME_PATH = '/app/.chrome-for-testing/chrome-linux64/chrome';
 async function sniperGDrive(driveUrl) {
     let browser;
     try {
-        console.log("🚀 Launching G-Drive Sniper Mode...");
+        console.log("🚀 Launching G-Drive Final Sniper...");
         browser = await puppeteer.launch({
             executablePath: HEROKU_CHROME_PATH,
             headless: true,
@@ -30,54 +30,54 @@ async function sniperGDrive(driveUrl) {
         const page = await browser.newPage();
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36');
 
-        let directDownloadLink = null;
+        let finalDirectLink = null;
 
-        // 🎯 DOWNLOAD REQUEST එක එනකම් බලාගෙන ඉන්නවා
+        // 🎯 NETWORK INTERCEPTION හරහා ඇත්තම ලින්ක් එක අල්ලගන්නවා
         await page.setRequestInterception(true);
         page.on('request', (request) => {
             const url = request.url();
-            // Google Drive direct download links සාමාන්‍යයෙන් doc-id හෝ drive-viewer හරහා එන්නේ
-            if (url.includes('confirm=t') || url.includes('export=download')) {
-                directDownloadLink = url;
+            
+            // Google Drive direct download වල 'at=' token එක අනිවාර්යයි
+            if (url.includes('drive.usercontent.google.com/download') && url.includes('at=')) {
+                finalDirectLink = url;
+                // අපිට ලින්ක් එක හම්බුනා නම් රික්වෙස්ට් එක ඇබෝර්ට් කරනවා (ඩවුන්ලෝඩ් එක නවත්තන්න)
+                request.abort();
+            } else {
+                request.continue();
             }
-            request.continue();
         });
 
         await page.goto(driveUrl, { waitUntil: 'networkidle2' });
 
-        // "Download anyway" බට්න් එක තියෙනවද කියලා බලනවා
-        const downloadButtonSelector = '#uc-download-link';
-        const hasWarning = await page.$(downloadButtonSelector);
+        const btnSelector = '#uc-download-link';
+        const hasWarning = await page.$(btnSelector);
 
         if (hasWarning) {
-            console.log("⚠️ Warning page detected. Clicking 'Download Anyway'...");
+            console.log("⚠️ Warning detected. Triggering click...");
             
-            // බට්න් එක ක්ලික් කරනවා (සමහර වෙලාවට popups එන්න පුළුවන් හින්දා evaluate එක හරි)
+            // මෙතනදී ක්ලික් එක කරනකොටම interceptor එකෙන් ලින්ක් එක අහුවෙනවා
             await page.evaluate((sel) => {
                 const btn = document.querySelector(sel);
                 if (btn) btn.click();
-            }, downloadButtonSelector);
+            }, btnSelector);
 
-            // ලින්ක් එක capture වෙනකම් පොඩි වෙලාවක් ඉන්නවා
+            // ලින්ක් එක capture වෙනකම් තත්පර 5ක් වගේ බලමු
             for (let i = 0; i < 10; i++) {
-                if (directDownloadLink) break;
-                await new Promise(r => setTimeout(r, 1000));
+                if (finalDirectLink) break;
+                await new Promise(r => setTimeout(r, 500));
             }
-        } else {
-            // කෙලින්ම file එක තියෙනවා නම් (Warning එකක් නැතිව)
-            // මේකෙදි bypass එකක් ඕන වෙන්නේ නැහැ, නමුත් bypass එකක් ඉල්ලන නිසා අපි direct link එක බලමු
-            directDownloadLink = driveUrl;
         }
 
-        if (directDownloadLink) {
-            console.log("🎯 G-Drive Success! Link Captured.");
-            return { success: true, download_url: directDownloadLink };
+        if (finalDirectLink) {
+            console.log("🎯 Success! Direct Link with Token Captured.");
+            return { success: true, download_url: finalDirectLink };
         } else {
-            throw new Error("Failed to capture direct download link.");
+            // ලින්ක් එක අහු වුනේ නැත්නම් මුල් ලින්ක් එකේ confirm=t දාලා උත්සාහ කරමු
+            const fallback = driveUrl.replace('view?usp=sharing', 'download?confirm=t').replace('file/d/', 'download?id=').split('/view')[0];
+            return { success: true, download_url: fallback };
         }
 
     } catch (e) {
-        console.error("GDrive Error:", e.message);
         return { success: false, error: e.message };
     } finally {
         if (browser) await browser.close();
