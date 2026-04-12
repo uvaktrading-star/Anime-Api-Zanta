@@ -20,76 +20,82 @@ const HEROKU_CHROME_PATH = '/app/.chrome-for-testing/chrome-linux64/chrome';
 async function sniperGDrive(driveUrl) {
     let browser;
     try {
-        console.log(`[${new Date().toISOString()}] 🔍 Target Acquired: ${driveUrl}`);
+        console.log(`[${new Date().toISOString()}] 🔍 Starting High-Speed Sniper...`);
         
         browser = await puppeteer.launch({
             executablePath: HEROKU_CHROME_PATH,
             headless: true,
-            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-blink-features=AutomationControlled']
+            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
         });
 
         const page = await browser.newPage();
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36');
 
-        let finalUrl = null;
+        let capturedLink = null;
 
-        // 🎯 NETWORK SNIFFER: හැම රික්වෙස්ට් එකක්ම පරීක්ෂා කරනවා
+        // 🎯 1. Navigation එකක් විදියට ලින්ක් එක ආවොත් (Same Tab)
         await page.setRequestInterception(true);
         page.on('request', (request) => {
             const url = request.url();
-            // ඔයාගේ ඉමේජ් එකේ තියෙන විදියට 'at=' තියෙන ලින්ක් එක අල්ලගන්නවා
-            if (url.includes('drive.usercontent.google.com/download') && url.includes('at=')) {
-                console.log(`[${new Date().toISOString()}] 🎯 DIRECT LINK SNIPED: ${url.substring(0, 50)}...`);
-                finalUrl = url;
-                request.abort(); // ෆයිල් එක ඩවුන්ලෝඩ් වෙන්න ඕන නැති නිසා නවත්තනවා
+            if (url.includes('at=') && url.includes('confirm=t')) {
+                capturedLink = url;
+                console.log("✅ Captured via Request Interceptor!");
+                request.abort();
             } else {
                 request.continue();
             }
         });
 
-        console.log("Step 1: Navigating to Warning Page...");
-        await page.goto(driveUrl, { waitUntil: 'networkidle2', timeout: 30000 });
+        // 🎯 2. අලුත් ටැබ් එකක ලින්ක් එක ලෝඩ් වුනොත් (New Target)
+        browser.on('targetcreated', async (target) => {
+            const url = target.url();
+            if (url.includes('at=') && url.includes('confirm=t')) {
+                capturedLink = url;
+                console.log("✅ Captured via Target Monitor!");
+            }
+        });
+
+        await page.goto(driveUrl, { waitUntil: 'networkidle2' });
 
         const btnSelector = '#uc-download-link';
-        const hasWarning = await page.$(btnSelector);
+        await page.waitForSelector(btnSelector, { timeout: 10000 });
 
-        if (hasWarning) {
-            console.log("Step 2: 'Download Anyway' button found. Clicking now...");
-            
-            // ක්ලික් එක කරනවා. මේ වෙලාවේදී අර රික්වෙස්ට් එක ට්‍රිගර් වෙනවා.
-            await page.click(btnSelector);
+        console.log("Step 2: Triggering Download Anyway...");
+        
+        // පේජ් එක ඇතුළේ බටන් එක එබීම
+        await page.evaluate((sel) => {
+            const btn = document.querySelector(sel);
+            if (btn) btn.click();
+        }, btnSelector);
 
-            // රික්වෙස්ට් එක අහුවෙනකම් උපරිම තත්පර 10ක් බලන් ඉන්නවා
-            let attempts = 0;
-            while (!finalUrl && attempts < 20) {
-                await new Promise(r => setTimeout(r, 500));
-                attempts++;
-            }
-        } else {
-            console.log("⚠️ No warning button found. Link might be different.");
+        // ලින්ක් එක ලැබෙනකම් බලන් ඉන්න ලොජික් එක
+        let timeoutCount = 0;
+        while (!capturedLink && timeoutCount < 20) {
+            await new Promise(r => setTimeout(r, 500));
+            timeoutCount++;
         }
 
-        if (finalUrl) {
+        if (capturedLink) {
             return { 
                 success: true, 
-                download_url: finalUrl,
-                timestamp: new Date().toISOString()
+                download_url: capturedLink 
             };
         } else {
-            throw new Error("Could not capture the authenticated download link.");
+            // බැරිම වුනොත් බටන් එකේ href එක අරන් බලමු (සමහර වෙලාවට ඒකෙත් ටෝකන් එක තියෙන්න පුළුවන්)
+            const backupUrl = await page.evaluate(() => document.querySelector('#uc-download-link')?.href);
+            if (backupUrl && backupUrl.includes('at=')) {
+                return { success: true, download_url: backupUrl };
+            }
+            throw new Error("Link capture timeout. Google refused to generate the token.");
         }
 
     } catch (e) {
-        console.error(`[${new Date().toISOString()}] ❌ SNIPER ERROR:`, e.message);
+        console.error("❌ ERROR:", e.message);
         return { success: false, error: e.message };
     } finally {
-        if (browser) {
-            await browser.close();
-            console.log("Step 3: Browser closed.");
-        }
+        if (browser) await browser.close();
     }
 }
-
 //--------FITGIRL REPACK---------
 // --- 1. Search Games ---
 async function searchGames(query) {
