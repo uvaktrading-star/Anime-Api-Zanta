@@ -17,62 +17,47 @@ const CARTOONS_BASE = "https://cartoons.lk";
 const HEROKU_CHROME_PATH = '/app/.chrome-for-testing/chrome-linux64/chrome';
 
 //------G-DRIVE LINK-------
-async function sniperGDrive(driveUrl) {
-    let browser;
+async function getGDriveDirectLink(driveUrl) {
     try {
-        browser = await puppeteer.launch({
-            executablePath: HEROKU_CHROME_PATH,
-            headless: true,
-            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+        console.log("🚀 Extracting token via Request Header Method...");
+
+        // 1. මුලින්ම පේජ් එකේ HTML එක ගන්නවා
+        const response = await axios.get(driveUrl, {
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,webp,*/*;q=0.8'
+            }
         });
 
-        const page = await browser.newPage();
-        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36');
+        const html = response.data;
 
-        // 🎯 1. පේජ් එකට යනවා. networkidle0 දාන්නේ රික්වෙස්ට් ඔක්කොම ඉවර වෙනකම් බලන්න.
-        await page.goto(driveUrl, { waitUntil: 'networkidle0' });
+        // 2. HTML එක ඇතුළේ තියෙන 'at' ටෝකන් එක Regex එකකින් අල්ලගන්නවා
+        // ඔයා එවපු Source එකේ තියෙන name="at" value="..." කියන එක මෙතනින් ගන්නවා
+        const atMatch = html.match(/name="at"\s+value="([^"]+)"/);
+        const uuidMatch = html.match(/name="uuid"\s+value="([^"]+)"/);
+        const idMatch = html.match(/name="id"\s+value="([^"]+)"/);
 
-        // 🎯 2. 'at' ටෝකන් එක එනකම් විතරක් බලන් ඉන්නවා (මේක මයික්‍රෝ තත්පර ගාණක් වෙන්නත් පුළුවන්)
-        await page.waitForSelector('input[name="at"]', { timeout: 5000 });
+        if (atMatch && atMatch[1]) {
+            const atToken = atMatch[1];
+            const uuid = uuidMatch ? uuidMatch[1] : '';
+            const fileId = idMatch ? idMatch[1] : driveUrl.split('id=')[1].split('&')[0];
 
-        // 🎯 3. සම්පූර්ණ ෆෝම් දත්ත ටික එකපාර අරගන්නවා
-        const formDetails = await page.evaluate(() => {
-            const form = document.querySelector('#download-form');
-            if (!form) return null;
-            
-            const inputs = Array.from(form.querySelectorAll('input'));
-            const params = {};
-            inputs.forEach(input => {
-                if (input.name) params[input.name] = input.value;
-            });
+            // 3. දැන් ඔයා ඉල්ලපු විදියට Direct URL එක හදනවා
+            const directUrl = `https://drive.usercontent.google.com/download?id=${fileId}&export=download&confirm=t&uuid=${uuid}&at=${atToken}`;
 
+            console.log("🎯 Success! Token Sniped.");
             return {
-                action: form.getAttribute('action'),
-                params: params
-            };
-        });
-
-        if (formDetails && formDetails.params.at) {
-            const finalLink = new URL(formDetails.action);
-            Object.keys(formDetails.params).forEach(key => {
-                finalLink.searchParams.set(key, formDetails.params[key]);
-            });
-
-            // Direct link එක ඕන නිසා confirm=t අනිවාර්යයෙන්ම තියෙන්න ඕනේ
-            finalLink.searchParams.set('confirm', 't');
-
-            return { 
-                success: true, 
-                download_url: finalLink.toString() 
+                success: true,
+                download_url: directUrl
             };
         } else {
-            throw new Error("Token generation failed.");
+            // බැරිවෙලාවත් Regex එකෙන් අහු වුනේ නැත්නම් මුළු HTML එකම log කරලා බලන්න
+            console.log("❌ Token not found in HTML. Google might be blocking Heroku IP.");
+            return { success: false, error: "Security token not found in page source." };
         }
 
-    } catch (e) {
-        return { success: false, error: e.message };
-    } finally {
-        if (browser) await browser.close();
+    } catch (error) {
+        return { success: false, error: error.message };
     }
 }
 //--------FITGIRL REPACK---------
@@ -579,7 +564,7 @@ app.get('/api/gdrive/bypass', async (req, res) => {
     const driveUrl = req.query.url;
     if (!driveUrl) return res.json({ success: false, error: "Drive URL is required" });
     
-    const result = await sniperGDrive(driveUrl);
+    const result = await getGDriveDirectLink(driveUrl);
     res.json(result);
 });
 
