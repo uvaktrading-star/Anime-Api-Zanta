@@ -20,7 +20,7 @@ const HEROKU_CHROME_PATH = '/app/.chrome-for-testing/chrome-linux64/chrome';
 async function sniperGDrive(driveUrl) {
     let browser;
     try {
-        console.log(`[${new Date().toISOString()}] 🔍 Reading Form Data directly...`);
+        console.log(`[${new Date().toISOString()}] 🔍 Sniper Initiated: ${driveUrl}`);
         
         browser = await puppeteer.launch({
             executablePath: HEROKU_CHROME_PATH,
@@ -31,40 +31,50 @@ async function sniperGDrive(driveUrl) {
         const page = await browser.newPage();
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36');
 
-        await page.goto(driveUrl, { waitUntil: 'networkidle2' });
+        // Navigation timeout එක වැඩි කරමු
+        await page.goto(driveUrl, { waitUntil: 'networkidle0', timeout: 60000 });
 
-        // 🎯 Form එක ඇතුළේ තියෙන ඔක්කොම Input values ටික එකපාර ගන්නවා
-        const formData = await page.evaluate(() => {
-            const form = document.querySelector('#download-form');
-            if (!form) return null;
+        console.log("Step 1: Page Loaded. Checking for forms...");
+
+        // පොඩි වෙලාවක් ඉමු JS ටික රන් වෙන්න
+        await new Promise(r => setTimeout(r, 2000));
+
+        // 🎯 Form එක හොයන ලොජික් එක සහ Debugging
+        const result = await page.evaluate(() => {
+            const form = document.querySelector('form[action*="download"]');
+            if (!form) {
+                return { error: "FORM_NOT_FOUND", html: document.body.innerText.substring(0, 100) };
+            }
 
             const data = {};
-            const inputs = form.querySelectorAll('input[type="hidden"]');
+            const inputs = form.querySelectorAll('input');
             inputs.forEach(input => {
-                data[input.name] = input.value;
+                if (input.name) data[input.name] = input.value;
             });
-            
-            // Form action URL එකත් ගන්නවා
+
             return {
-                action: form.getAttribute('action'),
+                success: true,
+                action: form.getAttribute('action') || "https://drive.usercontent.google.com/download",
                 params: data
             };
         });
 
-        if (formData && formData.params.at) {
-            // 🔗 Query string එකක් විදියට ලින්ක් එක හදාගන්නවා
-            const finalUrl = new URL(formData.action);
-            Object.keys(formData.params).forEach(key => {
-                finalUrl.searchParams.append(key, formData.params[key]);
+        if (result.success) {
+            const finalUrl = new URL(result.action);
+            Object.keys(result.params).forEach(key => {
+                finalUrl.searchParams.set(key, result.params[key]);
             });
 
-            console.log("✅ Success! Direct link built from form tokens.");
-            return { 
-                success: true, 
-                download_url: finalUrl.toString() 
-            };
+            // අනිවාර්යයෙන් confirm=t තියෙන්න ඕනේ
+            if (!finalUrl.searchParams.has('confirm')) {
+                finalUrl.searchParams.set('confirm', 't');
+            }
+
+            console.log("✅ Success! Form tokens captured.");
+            return { success: true, download_url: finalUrl.toString() };
         } else {
-            throw new Error("Form tokens not found. Check if the file is accessible.");
+            console.log(`❌ Debug Info: ${result.error}. Content: ${result.html}`);
+            throw new Error(`Google Form not found on page. Content: ${result.html}`);
         }
 
     } catch (e) {
