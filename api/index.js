@@ -20,50 +20,73 @@ const HEROKU_CHROME_PATH = '/app/.chrome-for-testing/chrome-linux64/chrome';
 async function sniperGDrive(driveUrl) {
     let browser;
     try {
-        console.log("🚀 Launching High-Precision G-Drive Sniper...");
+        console.log(`[${new Date().toISOString()}] 🔍 Target Acquired: ${driveUrl}`);
+        
         browser = await puppeteer.launch({
             executablePath: HEROKU_CHROME_PATH,
             headless: true,
-            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-blink-features=AutomationControlled']
         });
 
         const page = await browser.newPage();
-        // Google එකට සැක හිතෙන්නේ නැති වෙන්න real user agent එකක්
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36');
 
-        await page.goto(driveUrl, { waitUntil: 'networkidle2' });
+        let finalUrl = null;
+
+        // 🎯 NETWORK SNIFFER: හැම රික්වෙස්ට් එකක්ම පරීක්ෂා කරනවා
+        await page.setRequestInterception(true);
+        page.on('request', (request) => {
+            const url = request.url();
+            // ඔයාගේ ඉමේජ් එකේ තියෙන විදියට 'at=' තියෙන ලින්ක් එක අල්ලගන්නවා
+            if (url.includes('drive.usercontent.google.com/download') && url.includes('at=')) {
+                console.log(`[${new Date().toISOString()}] 🎯 DIRECT LINK SNIPED: ${url.substring(0, 50)}...`);
+                finalUrl = url;
+                request.abort(); // ෆයිල් එක ඩවුන්ලෝඩ් වෙන්න ඕන නැති නිසා නවත්තනවා
+            } else {
+                request.continue();
+            }
+        });
+
+        console.log("Step 1: Navigating to Warning Page...");
+        await page.goto(driveUrl, { waitUntil: 'networkidle2', timeout: 30000 });
 
         const btnSelector = '#uc-download-link';
         const hasWarning = await page.$(btnSelector);
 
         if (hasWarning) {
-            console.log("⚠️ Warning page found. Sniping the token...");
+            console.log("Step 2: 'Download Anyway' button found. Clicking now...");
+            
+            // ක්ලික් එක කරනවා. මේ වෙලාවේදී අර රික්වෙස්ට් එක ට්‍රිගර් වෙනවා.
+            await page.click(btnSelector);
 
-            // බටන් එක ක්ලික් කරලා, ඒකෙන් එන ඊළඟ රික්වෙස්ට් එක අල්ලගන්නවා
-            const [response] = await Promise.all([
-                // ඇත්තම ඩවුන්ලෝඩ් එක පටන් ගන්න රික්වෙස්ට් එක එනකම් ඉන්නවා
-                page.waitForRequest(request => 
-                    request.url().includes('drive.usercontent.google.com/download') && 
-                    request.url().includes('at='), 
-                    { timeout: 15000 }
-                ),
-                // බටන් එක ක්ලික් කරනවා
-                page.click(btnSelector)
-            ]);
-
-            const finalUrl = response.url();
-            console.log("🎯 Success! Captured Link with Token.");
-            return { success: true, download_url: finalUrl };
+            // රික්වෙස්ට් එක අහුවෙනකම් උපරිම තත්පර 10ක් බලන් ඉන්නවා
+            let attempts = 0;
+            while (!finalUrl && attempts < 20) {
+                await new Promise(r => setTimeout(r, 500));
+                attempts++;
+            }
         } else {
-            // වෝනින් එකක් නැත්නම් කෙලින්ම ගිය ලින්ක් එකම දෙනවා
-            return { success: true, download_url: driveUrl };
+            console.log("⚠️ No warning button found. Link might be different.");
+        }
+
+        if (finalUrl) {
+            return { 
+                success: true, 
+                download_url: finalUrl,
+                timestamp: new Date().toISOString()
+            };
+        } else {
+            throw new Error("Could not capture the authenticated download link.");
         }
 
     } catch (e) {
-        console.error("Sniper Error:", e.message);
-        return { success: false, error: "Link capture failed. Try again." };
+        console.error(`[${new Date().toISOString()}] ❌ SNIPER ERROR:`, e.message);
+        return { success: false, error: e.message };
     } finally {
-        if (browser) await browser.close();
+        if (browser) {
+            await browser.close();
+            console.log("Step 3: Browser closed.");
+        }
     }
 }
 
