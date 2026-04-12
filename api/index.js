@@ -16,6 +16,40 @@ const ANIME_BASE = "https://animeheaven.me";
 const CARTOONS_BASE = "https://cartoons.lk";
 const HEROKU_CHROME_PATH = '/app/.chrome-for-testing/chrome-linux64/chrome';
 
+//------G-DRIVE LINK-------
+async function getGDriveDirectLink(driveUrl) {
+    try {
+        // Drive URL එකෙන් File ID එක වෙන් කරගන්නවා
+        const fileIdMatch = driveUrl.match(/[-\w]{25,}/);
+        if (!fileIdMatch) throw new Error("Invalid Google Drive URL");
+        const fileId = fileIdMatch[0];
+
+        const downloadUrl = `https://drive.google.com/uc?export=download&id=${fileId}`;
+
+        // Axios පාවිච්චි කරලා මුලින්ම පේජ් එකට යනවා (Cookie එක අල්ලගන්න)
+        const response = await client.get(downloadUrl);
+        
+        // පේජ් එකේ "confirm=..." කියන කෝඩ් එක තියෙනවද බලනවා (ලොකු ෆයිල් වලට විතරයි මේක එන්නේ)
+        const $ = cheerio.load(response.data);
+        const confirmCode = $('form#download-form input[name="confirm"]').val() || 
+                           $('a#uc-download-link').attr('href')?.split('confirm=')[1]?.split('&')[0];
+
+        if (confirmCode) {
+            // Bypass link එක හදනවා
+            return {
+                success: true,
+                fileId: fileId,
+                direct_url: `https://drive.google.com/uc?export=download&id=${fileId}&confirm=${confirmCode}`
+            };
+        }
+
+        // පොඩි ෆයිල් එකක් නම් කෙලින්ම original link එක වැඩ
+        return { success: true, fileId: fileId, direct_url: downloadUrl };
+
+    } catch (e) {
+        return { success: false, error: e.message };
+    }
+}
 
 //--------FITGIRL REPACK---------
 // --- 1. Search Games ---
@@ -515,6 +549,14 @@ app.get('/api/cartoons/download', async (req, res) => {
     const url = req.query.url;
     if (!url) return res.json({ success: false, error: "Cartoon URL required" });
     res.json(await getCartoonDownload(url));
+});
+
+app.get('/api/gdrive/bypass', async (req, res) => {
+    const driveUrl = req.query.url;
+    if (!driveUrl) return res.json({ success: false, error: "Drive URL is required" });
+    
+    const result = await getGDriveDirectLink(driveUrl);
+    res.json(result);
 });
 
 
