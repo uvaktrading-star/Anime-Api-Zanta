@@ -20,7 +20,7 @@ const HEROKU_CHROME_PATH = '/app/.chrome-for-testing/chrome-linux64/chrome';
 async function sniperGDrive(driveUrl) {
     let browser;
     try {
-        console.log("🚀 Launching G-Drive Final Sniper...");
+        console.log("🚀 Launching High-Precision G-Drive Sniper...");
         browser = await puppeteer.launch({
             executablePath: HEROKU_CHROME_PATH,
             headless: true,
@@ -28,24 +28,8 @@ async function sniperGDrive(driveUrl) {
         });
 
         const page = await browser.newPage();
+        // Google එකට සැක හිතෙන්නේ නැති වෙන්න real user agent එකක්
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36');
-
-        let finalDirectLink = null;
-
-        // 🎯 NETWORK INTERCEPTION හරහා ඇත්තම ලින්ක් එක අල්ලගන්නවා
-        await page.setRequestInterception(true);
-        page.on('request', (request) => {
-            const url = request.url();
-            
-            // Google Drive direct download වල 'at=' token එක අනිවාර්යයි
-            if (url.includes('drive.usercontent.google.com/download') && url.includes('at=')) {
-                finalDirectLink = url;
-                // අපිට ලින්ක් එක හම්බුනා නම් රික්වෙස්ට් එක ඇබෝර්ට් කරනවා (ඩවුන්ලෝඩ් එක නවත්තන්න)
-                request.abort();
-            } else {
-                request.continue();
-            }
-        });
 
         await page.goto(driveUrl, { waitUntil: 'networkidle2' });
 
@@ -53,32 +37,31 @@ async function sniperGDrive(driveUrl) {
         const hasWarning = await page.$(btnSelector);
 
         if (hasWarning) {
-            console.log("⚠️ Warning detected. Triggering click...");
-            
-            // මෙතනදී ක්ලික් එක කරනකොටම interceptor එකෙන් ලින්ක් එක අහුවෙනවා
-            await page.evaluate((sel) => {
-                const btn = document.querySelector(sel);
-                if (btn) btn.click();
-            }, btnSelector);
+            console.log("⚠️ Warning page found. Sniping the token...");
 
-            // ලින්ක් එක capture වෙනකම් තත්පර 5ක් වගේ බලමු
-            for (let i = 0; i < 10; i++) {
-                if (finalDirectLink) break;
-                await new Promise(r => setTimeout(r, 500));
-            }
-        }
+            // බටන් එක ක්ලික් කරලා, ඒකෙන් එන ඊළඟ රික්වෙස්ට් එක අල්ලගන්නවා
+            const [response] = await Promise.all([
+                // ඇත්තම ඩවුන්ලෝඩ් එක පටන් ගන්න රික්වෙස්ට් එක එනකම් ඉන්නවා
+                page.waitForRequest(request => 
+                    request.url().includes('drive.usercontent.google.com/download') && 
+                    request.url().includes('at='), 
+                    { timeout: 15000 }
+                ),
+                // බටන් එක ක්ලික් කරනවා
+                page.click(btnSelector)
+            ]);
 
-        if (finalDirectLink) {
-            console.log("🎯 Success! Direct Link with Token Captured.");
-            return { success: true, download_url: finalDirectLink };
+            const finalUrl = response.url();
+            console.log("🎯 Success! Captured Link with Token.");
+            return { success: true, download_url: finalUrl };
         } else {
-            // ලින්ක් එක අහු වුනේ නැත්නම් මුල් ලින්ක් එකේ confirm=t දාලා උත්සාහ කරමු
-            const fallback = driveUrl.replace('view?usp=sharing', 'download?confirm=t').replace('file/d/', 'download?id=').split('/view')[0];
-            return { success: true, download_url: fallback };
+            // වෝනින් එකක් නැත්නම් කෙලින්ම ගිය ලින්ක් එකම දෙනවා
+            return { success: true, download_url: driveUrl };
         }
 
     } catch (e) {
-        return { success: false, error: e.message };
+        console.error("Sniper Error:", e.message);
+        return { success: false, error: "Link capture failed. Try again." };
     } finally {
         if (browser) await browser.close();
     }
