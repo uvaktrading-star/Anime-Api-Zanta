@@ -24,7 +24,6 @@ const HEADERS = {
     'Upgrade-Insecure-Requests': '1'
 };
 
-const jar = new CookieJar();
 const client = wrapper(axios.create({ jar }));
 const BASE_URL = "https://fitgirl-repacks.site";
 const ANIME_BASE = "https://animeheaven.me";
