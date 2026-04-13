@@ -32,38 +32,52 @@ const HEROKU_CHROME_PATH = '/app/.chrome-for-testing/chrome-linux64/chrome';
 //-------CINESUBZ---------
 async function getBotSonicData(targetUrl) {
     try {
-        console.log("🍪 Fetching page source...");
+        console.log("🍪 Step 1: Visiting page to establish session...");
+        
+        // පලවෙනි රික්වෙස්ට් එක දාලා Cookies set කරගන්නවා
+        const initialRes = await client.get(targetUrl, { headers: HEADERS });
+        
+        // URL එකෙන් Path එක සහ Query එක වෙන් කරගන්නවා
+        // උදා: /server6/202601/Jana%20Nayagan...
+        const parsedUrl = new URL(targetUrl);
+        const currentPath = parsedUrl.pathname + parsedUrl.search;
+        
+        // 🎯 අර ස්ක්‍රිප්ට් එකේ තිබුණ විදියටම API URL එක හදනවා
+        const apiUrl = `https://${parsedUrl.hostname}/api/download-data${currentPath}`;
+        
+        console.log(`🚀 Step 2: Fetching data from Internal API: ${apiUrl}`);
 
-        const response = await client.get(targetUrl, { headers: HEADERS });
-        const html = response.data;
-        const $ = cheerio.load(html);
-
-        // 1. පේජ් එකේ තියෙන හැම Script එකක්ම චෙක් කරනවා
-        let scriptContent = "";
-        $('script').each((_, el) => {
-            const content = $(el).html();
-            // අපි හොයන ලොජික් එක තියෙන්නේ 'location' හෝ 'token' වගේ වචනයක් තියෙන Script එකක වෙන්න පුළුවන්
-            if (content && (content.includes('window.location') || content.includes('setTimeout'))) {
-                scriptContent = content;
+        // ඒ API එකට රික්වෙස්ට් එක දානවා (Cookies අනිවාර්යයි)
+        const apiResponse = await client.get(apiUrl, {
+            headers: {
+                ...HEADERS,
+                'Accept': 'application/json',
+                'Referer': targetUrl, // මේක වැදගත්, සයිට් එකෙන් චෙක් කරනවා කොහෙන්ද ආවේ කියලා
+                'X-Requested-With': 'XMLHttpRequest'
             }
         });
 
-        // 2. දැනට එන HTML එකේ වැදගත් කෑල්ලක් තියෙනවද බලන්න Regex එකක් දාමු
-        // ගොඩක් වෙලාවට 'url' හෝ 'path' කියලා variable එකක ඇත්තම ලින්ක් එක ඇති
-        const linkMatch = html.match(/var\s+url\s+=\s+'([^']+)'/) || 
-                          html.match(/window\.location\.href\s+=\s+"([^"]+)"/);
+        const data = apiResponse.data;
 
-        console.log("[DEBUG] Found Script Content Length:", scriptContent.length);
-
-        return {
-            success: true,
-            page_title: $('title').text().trim(),
-            detected_link: linkMatch ? linkMatch[1] : "Not Found",
-            // මෙන්න මේකෙන් අපිට බලාගන්න පුළුවන් Script එක ඇතුළේ මොකක්ද තියෙන්නේ කියලා
-            script_sample: scriptContent.substring(0, 500) // මුල් අකුරු 500 විතරක් බලමු
-        };
+        // API එකෙන් එන JSON එක ඇතුළේ 'url' හෝ 'download_url' වගේ එකක් ඇති
+        // මම හිතන්නේ මේකේ එන්නේ { "status": true, "url": "DIRECT_LINK_HERE" } වගේ එකක්
+        if (data && data.url) {
+            console.log("🎯 Direct Link Captured!");
+            return {
+                success: true,
+                direct_link: data.url,
+                api_response: data
+            };
+        } else {
+            return {
+                success: false,
+                error: "Direct link not found in API response",
+                debug_data: data
+            };
+        }
 
     } catch (error) {
+        console.error("Scraping Failed:", error.message);
         return { success: false, error: error.message };
     }
 }
