@@ -38,7 +38,7 @@ async function getCinesubzFullHTML(targetUrl) {
         browser = await puppeteer.launch({
             executable_path: HEROKU_CHROME_PATH,
             headless: true,
-            args: PUPPETEER_ARGS
+            args:  ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
         });
 
         const page = await browser.newPage();
