@@ -32,44 +32,38 @@ const HEROKU_CHROME_PATH = '/app/.chrome-for-testing/chrome-linux64/chrome';
 //-------CINESUBZ---------
 async function getBotSonicData(targetUrl) {
     try {
-        console.log("🍪 Initializing session and fetching cookies...");
+        console.log("🍪 Fetching page source...");
 
-        // 1. මුලින්ම සයිට් එකට රික්වෙස්ට් එකක් දාලා Cookies සහ HTML එක ගන්නවා
-        const firstResponse = await client.get(targetUrl, { headers: HEADERS });
-        let html = firstResponse.data;
+        const response = await client.get(targetUrl, { headers: HEADERS });
+        const html = response.data;
         const $ = cheerio.load(html);
 
-        console.log("🎯 HTML Captured. Searching for scripts...");
-
-        // 2. HTML එක ඇතුළේ තියෙන JavaScript ලොජික් එක extract කරනවා
-        // මෙතනදී සයිට් එකේ තියෙන base64 links හෝ direct links අහුවෙනවා
-        let scripts = [];
+        // 1. පේජ් එකේ තියෙන හැම Script එකක්ම චෙක් කරනවා
+        let scriptContent = "";
         $('script').each((_, el) => {
-            const scriptContent = $(el).html();
-            if (scriptContent) scripts.push(scriptContent);
+            const content = $(el).html();
+            // අපි හොයන ලොජික් එක තියෙන්නේ 'location' හෝ 'token' වගේ වචනයක් තියෙන Script එකක වෙන්න පුළුවන්
+            if (content && (content.includes('window.location') || content.includes('setTimeout'))) {
+                scriptContent = content;
+            }
         });
 
-        // 3. Script එක ඇතුළේ තියෙන 'dl_link' හෝ විශේෂිත variables හොයන්න (Regex)
-        // උදාහරණයක් විදියට ලින්ක් එකක් සඟවා තිබේ නම්:
-        const linkMatch = html.match(/var\s+url\s+=\s+'([^']+)'/) || html.match(/location\.href\s+=\s+'([^']+)'/);
-        
-        // 4. සයිට් එකේ තියෙන form values (tokens) තිබේ නම් ඒවා එකතු කරමු
-        const hiddenInputs = {};
-        $('input[type="hidden"]').each((_, el) => {
-            hiddenInputs[$(el).attr('name')] = $(el).attr('value');
-        });
+        // 2. දැනට එන HTML එකේ වැදගත් කෑල්ලක් තියෙනවද බලන්න Regex එකක් දාමු
+        // ගොඩක් වෙලාවට 'url' හෝ 'path' කියලා variable එකක ඇත්තම ලින්ක් එක ඇති
+        const linkMatch = html.match(/var\s+url\s+=\s+'([^']+)'/) || 
+                          html.match(/window\.location\.href\s+=\s+"([^"]+)"/);
+
+        console.log("[DEBUG] Found Script Content Length:", scriptContent.length);
 
         return {
             success: true,
-            cookies_stored: true,
-            captured_link: linkMatch ? linkMatch[1] : null,
-            hidden_tokens: hiddenInputs,
-            // පේජ් එකේ title එක වගේ දේවල් (වැඩේ හරියට වුණාද බලන්න)
-            page_title: $('title').text().trim()
+            page_title: $('title').text().trim(),
+            detected_link: linkMatch ? linkMatch[1] : "Not Found",
+            // මෙන්න මේකෙන් අපිට බලාගන්න පුළුවන් Script එක ඇතුළේ මොකක්ද තියෙන්නේ කියලා
+            script_sample: scriptContent.substring(0, 500) // මුල් අකුරු 500 විතරක් බලමු
         };
 
     } catch (error) {
-        console.error("Scraping Error:", error.message);
         return { success: false, error: error.message };
     }
 }
