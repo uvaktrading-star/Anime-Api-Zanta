@@ -30,41 +30,53 @@ const CARTOONS_BASE = "https://cartoons.lk";
 const HEROKU_CHROME_PATH = '/app/.chrome-for-testing/chrome-linux64/chrome';
 
 //-------CINESUBZ---------
+// Sleep function එකක් හදාගමු
+const delay = ms => new Promise(res => setTimeout(res, ms));
+
 async function getBotSonicData(targetUrl) {
     try {
-        console.log("🍪 Capturing Full HTML and Scripts...");
+        console.log("🍪 Step 1: Visiting page to establish session...");
+        await client.get(targetUrl, { headers: HEADERS });
 
-        const response = await client.get(targetUrl, { headers: HEADERS });
-        const html = response.data;
-        const $ = cheerio.load(html);
+        // 🎯 තත්පර 3ක් ඉමු (බ්‍රවුසර් එකේ Loading වෙන වෙලාව)
+        console.log("⏳ Step 2: Waiting for verification (3s)...");
+        await delay(3500);
 
-        // 1. පේජ් එකේ තියෙන ඔක්කොම Scripts ටික එකතු කරගමු
-        let allScripts = [];
-        $('script').each((_, el) => {
-            const content = $(el).html();
-            if (content) {
-                allScripts.push(content);
+        const parsedUrl = new URL(targetUrl);
+        const currentPath = parsedUrl.pathname + parsedUrl.search;
+        const apiUrl = `https://${parsedUrl.hostname}/api/download-data${currentPath}`;
+
+        console.log("🚀 Step 3: Fetching direct data...");
+        const apiResponse = await client.get(apiUrl, {
+            headers: {
+                ...HEADERS,
+                'Accept': 'application/json',
+                'Referer': targetUrl,
+                'X-Requested-With': 'XMLHttpRequest'
             }
         });
 
-        // 2. HTML එක ඇතුළේ තියෙන Hidden Inputs (tokens) ටිකත් ගමු
-        let inputs = {};
-        $('input').each((_, el) => {
-            const name = $(el).attr('name');
-            const value = $(el).attr('value');
-            if (name) inputs[name] = value;
-        });
+        const data = apiResponse.data;
 
-        return {
-            success: true,
-            page_title: $('title').text().trim(),
-            // මුළු HTML එකම එවන්න එපා (ගොඩක් ලොකු වැඩි වෙයි), 
-            // ඒ වෙනුවට වැදගත් ටික විතරක් ගමු
-            scripts: allScripts, 
-            hidden_fields: inputs,
-            // පේජ් එකේ තියෙන links ටිකත් බලමු
-            links: $('a').map((i, el) => $(el).attr('href')).get().slice(0, 10)
-        };
+        // වැදගත්: මෙතනදී 'redirect' එකේ එන්නේ කලින් URL එකමද නැත්නම් වෙනස් එකක්ද බලන්න
+        if (data.success && data.redirect) {
+            // පරණ URL එකටම redirect වෙනවා නම් ලින්ක් එක තාම හැදිලා නැහැ
+            if (data.redirect.includes(parsedUrl.pathname)) {
+                 // තව පාරක් Retry කරමු (සමහරවිට තව වෙලාව ඕනෙ ඇති)
+                 console.log("🔄 Link still generating... retrying in 2s...");
+                 await delay(2000);
+                 const retryRes = await client.get(apiUrl, { headers: { ...HEADERS, 'Referer': targetUrl } });
+                 return { success: true, final_data: retryRes.data };
+            }
+            
+            return {
+                success: true,
+                direct_link: data.redirect,
+                full_data: data
+            };
+        } else {
+            return { success: false, data: data };
+        }
 
     } catch (error) {
         return { success: false, error: error.message };
