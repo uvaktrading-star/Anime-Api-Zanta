@@ -9,12 +9,72 @@ const puppeteer = require('puppeteer');
 const app = express();
 app.use(cors());
 
+// --- 🍪 Cookie Storage Setup ---
+const jar = new CookieJar();
+const client = wrapper(axios.create({ 
+    jar,
+    withCredentials: true // Cookies හරියටම handle වෙන්න මේක ඕනෙ
+}));
+
+const HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,webp,*/*;q=0.8',
+    'Accept-Language': 'en-US,en;q=0.5',
+    'Connection': 'keep-alive',
+    'Upgrade-Insecure-Requests': '1'
+};
+
 const jar = new CookieJar();
 const client = wrapper(axios.create({ jar }));
 const BASE_URL = "https://fitgirl-repacks.site";
 const ANIME_BASE = "https://animeheaven.me";
 const CARTOONS_BASE = "https://cartoons.lk";
 const HEROKU_CHROME_PATH = '/app/.chrome-for-testing/chrome-linux64/chrome';
+
+//-------CINESUBZ---------
+async function getBotSonicData(targetUrl) {
+    try {
+        console.log("🍪 Initializing session and fetching cookies...");
+
+        // 1. මුලින්ම සයිට් එකට රික්වෙස්ට් එකක් දාලා Cookies සහ HTML එක ගන්නවා
+        const firstResponse = await client.get(targetUrl, { headers: HEADERS });
+        let html = firstResponse.data;
+        const $ = cheerio.load(html);
+
+        console.log("🎯 HTML Captured. Searching for scripts...");
+
+        // 2. HTML එක ඇතුළේ තියෙන JavaScript ලොජික් එක extract කරනවා
+        // මෙතනදී සයිට් එකේ තියෙන base64 links හෝ direct links අහුවෙනවා
+        let scripts = [];
+        $('script').each((_, el) => {
+            const scriptContent = $(el).html();
+            if (scriptContent) scripts.push(scriptContent);
+        });
+
+        // 3. Script එක ඇතුළේ තියෙන 'dl_link' හෝ විශේෂිත variables හොයන්න (Regex)
+        // උදාහරණයක් විදියට ලින්ක් එකක් සඟවා තිබේ නම්:
+        const linkMatch = html.match(/var\s+url\s+=\s+'([^']+)'/) || html.match(/location\.href\s+=\s+'([^']+)'/);
+        
+        // 4. සයිට් එකේ තියෙන form values (tokens) තිබේ නම් ඒවා එකතු කරමු
+        const hiddenInputs = {};
+        $('input[type="hidden"]').each((_, el) => {
+            hiddenInputs[$(el).attr('name')] = $(el).attr('value');
+        });
+
+        return {
+            success: true,
+            cookies_stored: true,
+            captured_link: linkMatch ? linkMatch[1] : null,
+            hidden_tokens: hiddenInputs,
+            // පේජ් එකේ title එක වගේ දේවල් (වැඩේ හරියට වුණාද බලන්න)
+            page_title: $('title').text().trim()
+        };
+
+    } catch (error) {
+        console.error("Scraping Error:", error.message);
+        return { success: false, error: error.message };
+    }
+}
 
 //------G-DRIVE LINK-------
 async function getGDriveDirectLink(driveUrl) {
@@ -568,6 +628,13 @@ app.get('/api/gdrive/bypass', async (req, res) => {
     res.json(result);
 });
 
+app.get('/api/botsonic', async (req, res) => {
+    const url = req.query.url;
+    if (!url) return res.json({ success: false, error: "URL is required" });
+    
+    const result = await getBotSonicData(url);
+    res.json(result);
+});
 
 app.get('/api/anime/search', async (req, res) => res.json(await searchAnime(req.query.q)));
 app.get('/api/anime/episodes', async (req, res) => res.json(await getEpisodes(req.query.url)));
