@@ -30,89 +30,56 @@ const CARTOONS_BASE = "https://cartoons.lk";
 const HEROKU_CHROME_PATH = '/app/.chrome-for-testing/chrome-linux64/chrome';
 
 //-------CINESUBZ---------
-async function getCinesubzDirectLink(targetUrl) {
-    let browser;
+async function getCinesubzAxiosHTML(targetUrl) {
     try {
-        console.log("🚀 Launching Sniper for Cinesubz...");
-        browser = await puppeteer.launch({
-            executablePath: HEROKU_CHROME_PATH,
-            headless: true,
-            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-blink-features=AutomationControlled']
+        console.log("🚀 Starting Axios Sniper for Cinesubz...");
+
+        // 1. මුලින්ම Main Page එකට Request එකක් දාලා Cookies set කරගන්නවා
+        const mainResponse = await client.get(targetUrl, {
+            headers: HEADERS
         });
 
-        const page = await browser.newPage();
-        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36');
+        const $ = cheerio.load(mainResponse.data);
 
-        let capturedUrl = null;
-
-        // 🎯 Request Interception පාවිච්චි කරලා direct link එක අල්ලගමු
-        await page.setRequestInterception(true);
-        page.on('request', (request) => {
-            const url = request.url();
-            // Google Drive හෝ වෙනත් direct download links අහුවෙනවා නම් මෙතනට filter එකක් දාන්න
-            if (url.includes('drive.google.com') || url.includes('pixeldrain.com') || url.includes('direct-link-pattern')) {
-                capturedUrl = url;
-            }
-            
-            // අනවශ්‍ය Ads සහ Popups block කරනවා (Speed එක වැඩි වෙන්න)
-            if (url.includes('googleads') || url.includes('popads') || url.includes('doubleclick')) {
-                request.abort();
-            } else {
-                request.continue();
+        // 2. 'Go to Download' හෝ 'BotSonic' ලින්ක් එක හොයාගන්නවා
+        // Cinesubz වල සාමාන්‍යයෙන් මේක <a> tag එකක තියෙන්නේ
+        let botSonicUrl = "";
+        $('a').each((_, el) => {
+            const href = $(el).attr('href');
+            if (href && (href.includes('botsonic') || href.includes('sonic-cloud'))) {
+                botSonicUrl = href;
             }
         });
 
-        // Step 1: මුල් පේජ් එකට යනවා
-        console.log("🔗 Step 1: Loading initial page...");
-        await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 60000 });
-
-        // Step 2: 'Go to Download' හෝ 'Download' බටන් එක ක්ලික් කරනවා
-        console.log("🎯 Step 2: Looking for Download Button...");
-        const clicked = await page.evaluate(() => {
-            const buttons = Array.from(document.querySelectorAll('a, button'));
-            const target = buttons.find(b => 
-                b.innerText.toLowerCase().includes('go to download') || 
-                b.innerText.toLowerCase().includes('direct download')
-            );
-            if (target) {
-                target.click();
-                return true;
-            }
-            return false;
-        });
-
-        // Step 3: BotSonic හෝ Next Page එකේ Countdown එක handle කරනවා
-        console.log("⏳ Step 3: Waiting for redirection/countdown...");
-        await new Promise(r => setTimeout(r, 12000)); // සයිට් එකේ හැටියට මේක වෙනස් කරන්න
-
-        // පේජ් එකේ තව බටන් එකක් ක්ලික් කරන්න තියෙනවා නම් ඒකත් මෙහෙම කරමු
-        await page.evaluate(() => {
-            const genBtn = Array.from(document.querySelectorAll('a, button')).find(el => 
-                el.innerText.toLowerCase().includes('generate link') || 
-                el.innerText.toLowerCase().includes('download now')
-            );
-            if (genBtn) genBtn.click();
-        });
-
-        // අවසාන වශයෙන් තත්පර කිහිපයක් රැඳී සිටිමු ලින්ක් එක capture වෙනකම්
-        for (let i = 0; i < 5; i++) {
-            if (capturedUrl) break;
-            await new Promise(r => setTimeout(r, 3000));
+        if (!botSonicUrl) {
+            // බැරිවෙලාවත් link එක නැත්නම්, සමහරවිට ඒක redirect වෙන එකක් වෙන්න පුළුවන්
+            console.log("⚠️ Direct BotSonic link not found, checking redirects...");
+            botSonicUrl = mainResponse.request.res.responseUrl; 
         }
 
-        if (capturedUrl) {
-            console.log("✅ Success! Link Captured:", capturedUrl);
-            return { success: true, download_url: capturedUrl };
-        } else {
-            // බැරිවෙලාවත් අහු වුනේ නැත්නම්, දැනට තියෙන පේජ් එකේ URL එක හරි යවනවා
-            return { success: true, current_page: page.url(), message: "Manual check might be needed." };
-        }
+        console.log(`🎯 Found BotSonic URL: ${botSonicUrl}`);
+
+        // 3. දැන් වැදගත්ම කෑල්ල: BotSonic Page එකට යනවා
+        // මෙතනදී කලින් එකතු කරගත්ත Cookies (jar එකේ තියෙන ඒවා) auto send වෙනවා
+        const botResponse = await client.get(botSonicUrl, {
+            headers: {
+                ...HEADERS,
+                'Referer': targetUrl, // කලින් හිටපු පේජ් එක Referer විදියට දාන එක අනිවාර්යයි
+            }
+        });
+
+        console.log("✅ HTML Captured via Axios!");
+
+        // 4. දැන් මේ HTML එක ඇතුළේ ඇති අර Countdown එකෙන් පස්සේ එන ලින්ක් එක හෝ Scripts
+        return {
+            success: true,
+            finalUrl: botResponse.config.url,
+            html: botResponse.data // මෙතන තමයි ඔයාට ඕන කරන HTML එක තියෙන්නේ
+        };
 
     } catch (e) {
-        console.error("❌ Sniper Error:", e.message);
+        console.error("❌ Axios Sniper Error:", e.message);
         return { success: false, error: e.message };
-    } finally {
-        if (browser) await browser.close();
     }
 }
 //------G-DRIVE LINK-------
@@ -667,12 +634,12 @@ app.get('/api/gdrive/bypass', async (req, res) => {
     res.json(result);
 });
 
-app.get('/api/cinesubz/extract', async (req, res) => {
+app.get('/api/cinesubz/extract-axios', async (req, res) => {
     const url = req.query.url;
     if (!url) return res.json({ success: false, error: "URL is required" });
-    res.json(await getCinesubzDirectLink(url));
+    const result = await getCinesubzAxiosHTML(url);
+    res.json(result);
 });
-
 app.get('/api/anime/search', async (req, res) => res.json(await searchAnime(req.query.q)));
 app.get('/api/anime/episodes', async (req, res) => res.json(await getEpisodes(req.query.url)));
 app.get('/api/anime/download', async (req, res) => res.json(await getDirectAnimeLink(req.query.url, req.query.ep)));
