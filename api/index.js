@@ -31,55 +31,68 @@ const HEROKU_CHROME_PATH = '/app/.chrome-for-testing/chrome-linux64/chrome';
 
 //-------CINESUBZ---------
 // Sleep function එකක් හදාගමු
-const delay = ms => new Promise(res => setTimeout(res, ms));
-
-async function getBotSonicData(targetUrl) {
+async function getCinesubzFullHTML(targetUrl) {
+    let browser;
     try {
-        console.log("🍪 Step 1: Visiting page to establish session...");
-        await client.get(targetUrl, { headers: HEADERS });
-
-        // 🎯 තත්පර 3ක් ඉමු (බ්‍රවුසර් එකේ Loading වෙන වෙලාව)
-        console.log("⏳ Step 2: Waiting for verification (3s)...");
-        await delay(3500);
-
-        const parsedUrl = new URL(targetUrl);
-        const currentPath = parsedUrl.pathname + parsedUrl.search;
-        const apiUrl = `https://${parsedUrl.hostname}/api/download-data${currentPath}`;
-
-        console.log("🚀 Step 3: Fetching direct data...");
-        const apiResponse = await client.get(apiUrl, {
-            headers: {
-                ...HEADERS,
-                'Accept': 'application/json',
-                'Referer': targetUrl,
-                'X-Requested-With': 'XMLHttpRequest'
-            }
+        console.log("🚀 Launching Sniper for Cinesubz...");
+        browser = await puppeteer.launch({
+            executable_path: HEROKU_CHROME_PATH,
+            headless: true,
+            args: PUPPETEER_ARGS
         });
 
-        const data = apiResponse.data;
+        const page = await browser.newPage();
+        
+        // Browser එකක් වගේම පේන්න මේක දාමු
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36');
 
-        // වැදගත්: මෙතනදී 'redirect' එකේ එන්නේ කලින් URL එකමද නැත්නම් වෙනස් එකක්ද බලන්න
-        if (data.success && data.redirect) {
-            // පරණ URL එකටම redirect වෙනවා නම් ලින්ක් එක තාම හැදිලා නැහැ
-            if (data.redirect.includes(parsedUrl.pathname)) {
-                 // තව පාරක් Retry කරමු (සමහරවිට තව වෙලාව ඕනෙ ඇති)
-                 console.log("🔄 Link still generating... retrying in 2s...");
-                 await delay(2000);
-                 const retryRes = await client.get(apiUrl, { headers: { ...HEADERS, 'Referer': targetUrl } });
-                 return { success: true, final_data: retryRes.data };
-            }
-            
-            return {
-                success: true,
-                direct_link: data.redirect,
-                full_data: data
-            };
-        } else {
-            return { success: false, data: data };
+        // 1. මුලින්ම 'Go to Download' පේජ් එකට යනවා
+        console.log("🔗 Step 1: Loading Go-to-Download page...");
+        await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 60000 });
+
+        // 2. ඒ පේජ් එකේ තියෙන 'BotSonic' ලින්ක් එක හොයාගන්නවා
+        // ගොඩක් වෙලාවට මේක තියෙන්නේ 'a' tag එකක href එකක් විදියට
+        const botSonicUrl = await page.evaluate(() => {
+            const anchors = Array.from(document.querySelectorAll('a'));
+            const link = anchors.find(a => a.href.includes('botsonic') || a.innerText.toLowerCase().includes('download'));
+            return link ? link.href : null;
+        });
+
+        if (!botSonicUrl) {
+            throw new Error("BotSonic link not found on the initial page.");
         }
 
-    } catch (error) {
-        return { success: false, error: error.message };
+        console.log(`🎯 Step 2: Found BotSonic Link: ${botSonicUrl}`);
+
+        // 3. දැන් BotSonic පේජ් එකට යනවා
+        console.log("⏳ Step 3: Navigating to BotSonic and waiting for countdown...");
+        await page.goto(botSonicUrl, { waitUntil: 'networkidle2', timeout: 60000 });
+
+        // 4. Countdown එක ඉවර වෙනකම් ඉන්න ඕනෙ. 
+        // BotSonic එකේ සාමාන්‍යයෙන් තත්පර 10-15ක් යනවා. අපි තත්පර 15ක් safe margin එකක් තියාගමු.
+        // එහෙම නැත්නම් පේජ් එකේ තියෙන "Generate Link" හෝ "Download" බටන් එක එනකම් wait කරන්නත් පුළුවන්.
+        await new Promise(r => setTimeout(r, 16000)); 
+
+        // 5. දැන් තමයි වැදගත්ම දේ - මුළු HTML එකම ගන්නවා
+        // මේ වෙලාවේ Cookies සහ අනිත් සෙෂන් ඔක්කොම Browser එකේ තියෙනවා.
+        const fullHTML = await page.content();
+        
+        console.log("✅ Step 4: Full HTML Captured!");
+
+        return {
+            success: true,
+            url: page.url(),
+            html: fullHTML
+        };
+
+    } catch (e) {
+        console.error("❌ Sniper Error:", e.message);
+        return { success: false, error: e.message };
+    } finally {
+        if (browser) {
+            await browser.close();
+            console.log("🔒 Browser Closed.");
+        }
     }
 }
 //------G-DRIVE LINK-------
@@ -634,11 +647,11 @@ app.get('/api/gdrive/bypass', async (req, res) => {
     res.json(result);
 });
 
-app.get('/api/botsonic', async (req, res) => {
+app.get('/api/cinesubz/extract', async (req, res) => {
     const url = req.query.url;
     if (!url) return res.json({ success: false, error: "URL is required" });
     
-    const result = await getBotSonicData(url);
+    const result = await getCinesubzFullHTML(url);
     res.json(result);
 });
 
