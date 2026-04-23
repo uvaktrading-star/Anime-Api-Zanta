@@ -32,95 +32,72 @@ const HEROKU_CHROME_PATH = '/app/.chrome-for-testing/chrome-linux64/chrome';
 //-------DIALOG AI-------
 async function askDialogAI(question) {
     let browser;
+    let page; // Scope එක මෙතනට ගත්තා crash එක නවත්තන්න
     try {
         console.log("🚀 [STEP 1] Launching Browser...");
         browser = await puppeteer.launch({
             executablePath: HEROKU_CHROME_PATH,
             headless: true,
-            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu']
         });
 
-        const page = await browser.newPage();
+        page = await browser.newPage();
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36');
 
-        console.log("🌐 [STEP 2] Navigating to Dialog AI...");
-        await page.goto('https://ai.dialog.lk/', { waitUntil: 'networkidle2', timeout: 30000 });
+        console.log("🌐 [STEP 2] Navigating...");
+        // Fast navigation: networkidle2 වෙනකම් ඉන්නේ නැතුව load වෙනකම් විතරක් ඉමු
+        await page.goto('https://ai.dialog.lk/', { waitUntil: 'load', timeout: 20000 });
 
         const inputSelector = 'textarea';
-        await page.waitForSelector(inputSelector, { timeout: 15000 });
+        await page.waitForSelector(inputSelector, { timeout: 10000 });
 
-        console.log(`✍️ [STEP 3] Sending Question: ${question}`);
+        // කලින් තිබ්බ පණිවිඩ ගණන
+        const initialCount = await page.evaluate(() => document.querySelectorAll('.markdown-content').length);
+
+        console.log(`✍️ [STEP 3] Sending: ${question}`);
         await page.focus(inputSelector);
         await page.type(inputSelector, question);
         await page.keyboard.press('Enter');
 
-        console.log("🕵️ [STEP 4] Deep Monitoring Started (Logging all new elements)...");
+        console.log("⏳ [STEP 4] Waiting for AI...");
 
-        // මෙතනදී අපි පේජ් එකේ වෙන හැම වෙනසක්ම ලොග් කරනවා
-        const response = await page.evaluate(async (userQ) => {
+        // Heroku timeout එකට කලින් වැඩේ ඉවර කරන්න ඕනේ නිසා 
+        // අපි MutationObserver එක වෙනුවට අලුත් පණිවිඩයක් එනකම් සරලව බලමු
+        const aiAnswer = await page.evaluate(async (prevCount) => {
             return new Promise((resolve) => {
-                // Chat එක තියෙන ප්‍රධාන container එක (ඔයා එවපු path එකට අනුව)
-                const targetNode = document.querySelector('.max-w-4xl.mx-auto.space-y-4') || document.body;
-                
-                let lastFoundText = "";
-                let checkCount = 0;
-
-                const observer = new MutationObserver((mutations) => {
-                    const messages = document.querySelectorAll('.markdown-content');
-                    
-                    messages.forEach((msg, index) => {
-                        const txt = msg.innerText.trim();
-                        // හැම පණිවිඩයක්ම ලොග් කරලා බලමු (Console එකේ වැටෙයි)
-                        console.log(`Message [${index}]: ${txt.substring(0, 30)}...`);
-
-                        // අපේ කොන්දේසි: 
-                        // 1. Text එකක් තියෙන්න ඕනේ
-                        // 2. ඒක අපි අහපු ප්‍රශ්නය නෙවෙයි වෙන්න ඕනේ
-                        // 3. ඒක Welcome message එක නෙවෙයි වෙන්න ඕනේ
-                        if (txt.length > 0 && 
-                            !txt.toLowerCase().includes(userQ.toLowerCase()) && 
-                            !txt.includes("Dialog Axiata")) {
-                            lastFoundText = txt;
-                        }
-                    });
-
-                    // උත්තරයක් හම්බුණොත් සහ ඒක update වෙන එක නතර වුණොත් (streaming finish)
-                    if (lastFoundText.length > 0) {
-                        checkCount++;
-                        if (checkCount > 10) { // සෑහෙන වෙලාවක් එකම text එක තිබ්බොත් ඉවරයි කියලා හිතමු
-                            observer.disconnect();
-                            resolve(lastFoundText);
+                let attempts = 0;
+                const check = setInterval(() => {
+                    const msgs = document.querySelectorAll('.markdown-content');
+                    // අලුත් පණිවිඩයක් ඇවිත් නම් සහ ඒක "Guest" notification එක නෙවෙයි නම්
+                    if (msgs.length > prevCount) {
+                        const lastMsg = msgs[msgs.length - 1].innerText.trim();
+                        if (lastMsg.length > 2) { 
+                            clearInterval(check);
+                            resolve(lastMsg);
                         }
                     }
-                });
-
-                observer.observe(targetNode, { childList: true, subtree: true });
-
-                // Timeout එකක් දාමු හදිස්සියේවත් හිර වුණොත්
-                setTimeout(() => {
-                    observer.disconnect();
-                    resolve(lastFoundText || "TIMEOUT_NO_NEW_MSG");
-                }, 25000);
+                    if (attempts > 60) { // තත්පර 15ක් බැලුවා ආවේ නැත්නම් නවත්තනවා
+                        clearInterval(check);
+                        resolve("TIMEOUT");
+                    }
+                    attempts++;
+                }, 250); // හැම 250ms කටම සැරයක් චෙක් කරනවා (Very Fast)
             });
-        }, question);
+        }, initialCount);
 
-        if (response === "TIMEOUT_NO_NEW_MSG") {
-            throw new Error("AI එකෙන් උත්තරයක් ආවේ නෑ (Timeout)");
-        }
+        if (aiAnswer === "TIMEOUT") throw new Error("AI response late");
 
-        console.log("🎯 [STEP 5] Final Response Captured!");
-        return { success: true, answer: response };
+        console.log("🎯 [STEP 5] Done!");
+        return { success: true, answer: aiAnswer };
 
     } catch (e) {
-        console.error("❌ ERROR LOGS -------------------");
-        console.error("Message:", e.message);
-        // පේජ් එකේ දැනට තියෙන ඔක්කොම text ටික වැරදුන වෙලාවේ ලොග් කරමු
-        const currentContent = await page.evaluate(() => document.body.innerText.substring(0, 500));
-        console.log("Current Page Preview:", currentContent);
-        console.error("---------------------------------");
+        console.error("❌ ERROR:", e.message);
         return { success: false, error: e.message };
     } finally {
-        if (browser) await browser.close();
+        if (browser) {
+            await browser.close();
+            console.log("🔌 Browser Closed.");
+        }
     }
 }
 //-------CINESUBZ---------
