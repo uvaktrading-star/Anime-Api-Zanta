@@ -33,48 +33,50 @@ const HEROKU_CHROME_PATH = '/app/.chrome-for-testing/chrome-linux64/chrome';
 async function askQuillBot(question) {
     let browser;
     try {
-        console.log("🚀 Launching QuillBot...");
+        console.log("🚀 Launching QuillBot Sniper...");
+        
+        // ඔයාගේ Anime API එකේ විදිහටම launch configuration එක
         browser = await puppeteer.launch({
-            executablePath: process.env.HEROKU_CHROME_PATH || null,
+            executablePath: HEROKU_CHROME_PATH, // කෙලින්ම path එක මෙතනට දෙනවා
             headless: true,
-            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+            args: [
+                '--no-sandbox', 
+                '--disable-setuid-sandbox', 
+                '--disable-dev-shm-usage',
+                '--disable-blink-features=AutomationControlled' // AI detection අඩු කරන්න
+            ]
         });
 
         const page = await browser.newPage();
         
-        // Browser එකක් වගේ ඇත්තටම පෙන්නන්න UA එකක් දාමු
+        // Real Browser එකක් විදිහට පෙනී සිටින්න
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36');
 
-        console.log("🌐 Navigating to QuillBot...");
+        console.log("🌐 Navigating to QuillBot AI Chat...");
         await page.goto('https://quillbot.com/ai-chat', { 
-            waitUntil: 'domcontentloaded', 
-            timeout: 30000 
+            waitUntil: 'networkidle2', // හොඳට load වෙනකම් ඉමු
+            timeout: 35000 
         });
 
-        // Chat input එක එනකම් ඉමු (මේ selector එක QuillBot එකේ textarea එකට අදාළයි)
+        // Chat input එක එනකම් ඉන්නවා
         const inputSelector = 'textarea#chat-input-textarea'; 
         await page.waitForSelector(inputSelector, { timeout: 15000 });
 
-        console.log(`✍️ Sending Message: ${question}`);
-        await page.type(inputSelector, question);
+        console.log(`✍️ Typing: ${question}`);
+        await page.focus(inputSelector);
+        await page.type(inputSelector, question, { delay: 50 }); // ටිකක් හිමින් type කරමු natural වෙන්න
         await page.keyboard.press('Enter');
 
-        console.log("⏳ Waiting for Response...");
+        console.log("⏳ Waiting for streaming response...");
 
-        // Response එක එනකම් බලන් ඉන්න logic එක
-        // QuillBot එකේ සාමාන්‍යයෙන් response එක එන්නේ ටික ටික (streaming)
-        // ඒ නිසා අපි එකම message එක තප්පර කීපයක් වෙනස් නොවී තියෙනවද කියලා බලමු
-        let lastResponse = "";
-        let stableCount = 0;
-
+        // Response එක capture කරන logic එක
         const aiAnswer = await page.evaluate(async () => {
             return new Promise((resolve) => {
                 let prevText = "";
                 let noChangeRounds = 0;
+                let attempts = 0;
 
                 const timer = setInterval(() => {
-                    // QuillBot එකේ අවසාන උත්තරය තියෙන div එකේ class එක මෙතනට එන්න ඕනේ
-                    // දැනට අපි පොදු selector එකක් පාවිච්චි කරමු
                     const bubbles = document.querySelectorAll('.markdown-content');
                     const lastBubble = bubbles[bubbles.length - 1];
                     const currentText = lastBubble ? lastBubble.innerText.trim() : "";
@@ -86,28 +88,28 @@ async function askQuillBot(question) {
                         prevText = currentText;
                     }
 
-                    // තත්පර 3ක් තිස්සේ message එක වෙනස් වුණේ නැත්නම් ඒ කියන්නේ උත්තරය දීලා ඉවරයි
-                    if (noChangeRounds > 12 && currentText.length > 0) { 
+                    // තත්පර 3ක් විතර එකම text එක තිබ්බොත් response එක ඉවරයි කියලා ගන්නවා
+                    if (noChangeRounds > 10 && currentText.length > 2) { 
                         clearInterval(timer);
                         resolve(currentText);
                     }
-                }, 250);
 
-                // උපරිම තත්පර 25ක් බලනවා
-                setTimeout(() => {
-                    clearInterval(timer);
-                    resolve("TIMEOUT");
-                }, 25000);
+                    if (attempts > 80) { // Max 20 sec wait
+                        clearInterval(timer);
+                        resolve(currentText || "TIMEOUT");
+                    }
+                    attempts++;
+                }, 250);
             });
         });
 
-        if (aiAnswer === "TIMEOUT") throw new Error("QuillBot took too long!");
+        if (aiAnswer === "TIMEOUT") throw new Error("QuillBot response capture timed out.");
 
-        console.log("🎯 Response Received!");
+        console.log("🎯 Success! Answer Captured.");
         return { success: true, answer: aiAnswer };
 
     } catch (e) {
-        console.error("❌ ERROR:", e.message);
+        console.error("❌ QuillBot Error:", e.message);
         return { success: false, error: e.message };
     } finally {
         if (browser) {
