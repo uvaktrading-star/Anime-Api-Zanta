@@ -29,6 +29,60 @@ const ANIME_BASE = "https://animeheaven.me";
 const CARTOONS_BASE = "https://cartoons.lk";
 const HEROKU_CHROME_PATH = '/app/.chrome-for-testing/chrome-linux64/chrome';
 
+//-------DIALOG AI-------
+async function askDialogAI(question) {
+    let browser;
+    try {
+        console.log("🚀 Launching Dialog AI Sniper...");
+        browser = await puppeteer.launch({
+            executablePath: HEROKU_CHROME_PATH, // ඔයාගේ code එකේ තියෙන path එකමයි
+            headless: true,
+            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+        });
+
+        const page = await browser.newPage();
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36');
+
+        // 1. Dialog AI පේජ් එකට යනවා
+        await page.goto('https://ai.dialog.lk/', { waitUntil: 'networkidle2', timeout: 60000 });
+
+        // 2. Chat box එක එනකම් ඉන්නවා
+        const inputSelector = 'textarea#chat-input'; // මේක සයිට් එකේ ඇත්ත ID එක අනුව වෙනස් වෙන්න පුළුවන්
+        await page.waitForSelector(inputSelector, { timeout: 20000 });
+
+        // 3. කලින් තිබුණු messages ගණන බලනවා (අලුත් එක අඳුරගන්න)
+        const initialMsgCount = await page.evaluate(() => document.querySelectorAll('.message-content').length);
+
+        // 4. ප්‍රශ්නය ටයිප් කරලා යවනවා
+        await page.type(inputSelector, question);
+        await page.keyboard.press('Enter');
+
+        console.log("⏳ Waiting for Dialog AI to respond...");
+
+        // 5. අලුත් message එකක් එනකම් ඉන්නවා (Max 30s)
+        await page.waitForFunction(
+            (prevCount) => document.querySelectorAll('.message-content').length > prevCount,
+            { timeout: 30000 },
+            initialMsgCount
+        );
+
+        // 6. අන්තිමට ආපු උත්තරේ ගන්නවා
+        const aiResponse = await page.evaluate(() => {
+            const messages = document.querySelectorAll('.message-content');
+            // අන්තිම message එක අරගෙන ඒකේ text එක දෙනවා
+            return messages[messages.length - 1].innerText.trim();
+        });
+
+        return { success: true, answer: aiResponse };
+
+    } catch (e) {
+        console.error("❌ Dialog Sniper Error:", e.message);
+        return { success: false, error: e.message };
+    } finally {
+        if (browser) await browser.close();
+    }
+}
+
 //-------CINESUBZ---------
 async function getCinesubzAxiosHTML(targetUrl) {
     try {
@@ -612,6 +666,14 @@ async function getCartoonDownload(inputUrl) {
         if (browser) await browser.close();
     }
 }
+
+app.get('/api/dialog/chat', async (req, res) => {
+    const q = req.query.q;
+    if (!q) return res.json({ success: false, error: "Question (q) is required" });
+    
+    const result = await askDialogAI(q);
+    res.json(result);
+});
 
 // Search: http://localhost:5000/api/cartoons/search?q=harry+potter
 app.get('/api/cartoons/search', async (req, res) => {
