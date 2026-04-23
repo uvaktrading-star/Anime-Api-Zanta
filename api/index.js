@@ -35,7 +35,7 @@ async function askDialogAI(question) {
     try {
         console.log("🚀 Launching Dialog AI Sniper...");
         browser = await puppeteer.launch({
-            executablePath: HEROKU_CHROME_PATH,
+            executable_path: HEROKU_CHROME_PATH,
             headless: true,
             args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
         });
@@ -43,37 +43,35 @@ async function askDialogAI(question) {
         const page = await browser.newPage();
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36');
 
-        await page.goto('https://ai.dialog.lk/', { waitUntil: 'networkidle2', timeout: 60000 });
+        // පේජ් එක ඉක්මනට ලෝඩ් වෙන්න domcontentloaded පාවිච්චි කරමු
+        await page.goto('https://ai.dialog.lk/', { waitUntil: 'domcontentloaded', timeout: 30000 });
 
-        // 1. නිකන්ම textarea එක එනකම් ඉන්නවා (ID එක නැතුව)
-        const inputSelector = 'textarea'; 
-        await page.waitForSelector(inputSelector, { timeout: 20000 });
+        const inputSelector = 'textarea';
+        await page.waitForSelector(inputSelector, { timeout: 10000 });
 
-        // 2. දැනට තියෙන පණිවිඩ ගණන
-        const initialCount = await page.evaluate(() => document.querySelectorAll('.prose').length);
+        // Screenshot එකට අනුව දැනට තියෙන පණිවිඩ ගණන
+        const initialCount = await page.evaluate(() => document.querySelectorAll('.markdown-content').length);
 
-        // 3. ප්‍රශ්නය ටයිප් කරනවා
         await page.type(inputSelector, question);
-        
-        // 4. Enter ප්‍රෙස් කරනවා
         await page.keyboard.press('Enter');
 
         console.log("⏳ Waiting for response...");
 
-        // 5. අලුත් පණිවිඩයක් එනකම් ඉන්නවා (.prose class එක තමයි උත්තරේට පාවිච්චි වෙන්නේ)
+        // .markdown-content එකක් අලුතින් එනකම් විතරක් බලන් ඉන්නවා
         await page.waitForFunction(
-            (prevCount) => document.querySelectorAll('.prose').length > prevCount,
-            { timeout: 30000 },
+            (prevCount) => document.querySelectorAll('.markdown-content').length > prevCount,
+            { timeout: 20000 }, // Heroku timeout වෙන්න කලින් මේක ඉවර කරන්න ඕනේ
             initialCount
         );
 
-        // පොඩි වෙලාවක් ඉමු අකුරු ටික වැටෙනකම්
+        // තත්පර 2ක් විතර ඉමු අන්තිම ටික වැටෙනකම්
         await new Promise(r => setTimeout(r, 2000));
 
-        // 6. අන්තිම උත්තරේ ගන්නවා
         const aiResponse = await page.evaluate(() => {
-            const messages = document.querySelectorAll('.prose');
-            return messages[messages.length - 1].innerText.trim();
+            const messages = document.querySelectorAll('.markdown-content');
+            // අන්තිම message එකේ තියෙන 'p' tag එකේ text එක ගන්නවා
+            const lastMsg = messages[messages.length - 1];
+            return lastMsg ? lastMsg.innerText.trim() : "No text found";
         });
 
         return { success: true, answer: aiResponse };
@@ -85,7 +83,6 @@ async function askDialogAI(question) {
         if (browser) await browser.close();
     }
 }
-
 //-------CINESUBZ---------
 async function getCinesubzAxiosHTML(targetUrl) {
     try {
