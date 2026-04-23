@@ -43,81 +43,51 @@ async function askDialogAI(question) {
         const page = await browser.newPage();
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36');
 
-        console.log("🌐 [STEP 2] Navigating to Dialog AI...");
-        await page.goto('https://ai.dialog.lk/', { waitUntil: 'domcontentloaded', timeout: 30000 });
+        console.log("🌐 [STEP 2] Navigating...");
+        await page.goto('https://ai.dialog.lk/', { waitUntil: 'networkidle2', timeout: 30000 });
 
-        console.log("🔍 [STEP 3] Checking for Textarea...");
         const inputSelector = 'textarea';
         await page.waitForSelector(inputSelector, { timeout: 15000 });
 
-        // කලින් තිබ්බ messages ගණන බලමු
+        // පේජ් එකේ දැනට තියෙන පණිවිඩ ටික හරියටම අල්ලගමු
         const initialCount = await page.evaluate(() => document.querySelectorAll('.markdown-content').length);
-        console.log(`📊 Current messages on page: ${initialCount}`);
+        console.log(`📊 Initial messages: ${initialCount}`);
 
-        console.log(`✍️ [STEP 4] Typing question: "${question}"`);
-        await page.type(inputSelector, question, { delay: 30 });
-
-        console.log("🖱️ [STEP 5] Clicking Send Button...");
-        // Enter එකට වඩා මේක safe. සයිට් එකේ තියෙන Send button එක හොයලා ක්ලික් කරනවා.
-        await page.evaluate(() => {
-            const buttons = Array.from(document.querySelectorAll('button'));
-            const sendBtn = buttons.find(b => b.innerHTML.includes('svg') || b.type === 'submit');
-            if (sendBtn) {
-                sendBtn.click();
-            } else {
-                // Button එක අහු වුණේ නැත්නම් විතරක් Enter ගහනවා
-                const input = document.querySelector('textarea');
-                const event = new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', which: 13, keyCode: 13, bubbles: true });
-                input.dispatchEvent(event);
-            }
-        });
-
-        console.log("⏳ [STEP 6] Waiting for AI to start responding...");
+        console.log(`✍️ [STEP 4] Typing: ${question}`);
+        await page.type(inputSelector, question);
         
-        // මේ පාර අපි බලන්නේ count එක වැඩි වෙනකම් විතරක් නෙවෙයි, 
-        // පේජ් එකේ "typing" indicator එකක් හෝ අලුත් div එකක් එනකම්.
+        // 🖱️ පියවර 5: Send Button එක හරියටම ඔබමු (aria-label="Send" තියෙන එක)
+        console.log("🖱️ [STEP 5] Clicking Send...");
+        await page.click('button[aria-label="Send"]');
+
+        console.log("⏳ [STEP 6] Waiting for new response container...");
+        
+        // පේජ් එකේ අලුත් පණිවිඩයක් (Markdown content) එනකම් බලමු
         await page.waitForFunction(
-            (prev) => {
-                const now = document.querySelectorAll('.markdown-content').length;
-                return now > prev;
-            },
+            (prev) => document.querySelectorAll('.markdown-content').length > prev,
             { timeout: 25000 },
             initialCount
         );
 
-        console.log("✅ [STEP 7] Response detected! Buffering text...");
+        console.log("✅ [STEP 7] Streaming text...");
         
-        // ටික වෙලාවක් ඉමු message එක සම්පූර්ණයෙන් generate වෙනකම්
-        let lastText = "";
-        for (let i = 0; i < 5; i++) {
-            await new Promise(r => setTimeout(r, 2000));
-            const currentText = await page.evaluate(() => {
-                const msgs = document.querySelectorAll('.markdown-content');
-                return msgs.length > 0 ? msgs[msgs.length - 1].innerText.trim() : "";
-            });
-            
-            if (currentText === lastText && currentText.length > 0) {
-                console.log("🏁 Text streaming finished.");
-                break;
-            }
-            lastText = currentText;
-            console.log(`📥 Receiving data... (${currentText.length} chars)`);
-        }
+        // AI එක ටයිප් කරලා ඉවර වෙනකම් තත්පර කිහිපයක් ඉමු
+        await new Promise(r => setTimeout(r, 5000)); 
 
-        console.log("🎯 [STEP 8] Finalizing response.");
-        return { success: true, answer: lastText };
+        const aiResponse = await page.evaluate(() => {
+            const msgs = document.querySelectorAll('.markdown-content');
+            // අන්තිම පණිවිඩය තමයි AI එකේ උත්තරේ
+            return msgs.length > 0 ? msgs[msgs.length - 1].innerText.trim() : "No response";
+        });
+
+        console.log("🎯 [STEP 8] Done!");
+        return { success: true, answer: aiResponse };
 
     } catch (e) {
-        console.error("❌ [ERROR LOGS] -------------------");
-        console.error("Message:", e.message);
-        console.error("Stack:", e.stack);
-        console.error("-----------------------------------");
+        console.error("❌ Error:", e.message);
         return { success: false, error: e.message };
     } finally {
-        if (browser) {
-            console.log("🔌 [STEP 9] Closing Browser.");
-            await browser.close();
-        }
+        if (browser) await browser.close();
     }
 }
 //-------CINESUBZ---------
