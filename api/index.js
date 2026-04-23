@@ -30,10 +30,11 @@ const CARTOONS_BASE = "https://cartoons.lk";
 const HEROKU_CHROME_PATH = '/app/.chrome-for-testing/chrome-linux64/chrome';
 
 //-------DIALOG AI-------
+//-------DIALOG AI (FINAL FIX)-------
 async function askDialogAI(question) {
     let browser;
     try {
-        console.log("🚀 [STEP 1] Launching Browser...");
+        console.log("🚀 [STEP 1] Launching...");
         browser = await puppeteer.launch({
             executablePath: HEROKU_CHROME_PATH,
             headless: true,
@@ -49,49 +50,45 @@ async function askDialogAI(question) {
         const inputSelector = 'textarea';
         await page.waitForSelector(inputSelector, { timeout: 15000 });
 
-        const initialCount = await page.evaluate(() => document.querySelectorAll('.markdown-content').length);
-        console.log(`📊 Initial messages: ${initialCount}`);
-
-        console.log(`✍️ [STEP 4] Typing & Pressing Enter: ${question}`);
+        console.log(`✍️ [STEP 4] Sending Question...`);
         await page.focus(inputSelector);
         await page.type(inputSelector, question);
-        
-        // ⌨️ [STEP 5] Button එක ක්ලික් කරන්නේ නැතුව Enter ගහනවා
         await page.keyboard.press('Enter');
 
-        console.log("⏳ [STEP 6] Waiting for new response...");
+        console.log("⏳ [STEP 5] Waiting for Real Response...");
         
-        // අලුත් message එකක් එනකම් බලමු
+        // පියවර 5: අන්තිම message එක අපේ ප්‍රශ්නය නෙවෙයි නම් සහ ඒකෙ text එකක් තියෙනවා නම් විතරක් ඉදිරියට යමු
         await page.waitForFunction(
-            (prev) => document.querySelectorAll('.markdown-content').length > prev,
-            { timeout: 25000 },
-            initialCount
+            (userQ) => {
+                const msgs = document.querySelectorAll('[class*="markdown-content"]');
+                if (msgs.length === 0) return false;
+                const lastMsg = msgs[msgs.length - 1].innerText.trim();
+                // අන්තිම message එක අපේ ප්‍රශ්නය නෙවෙයි නම් සහ Welcome message එක නෙවෙයි නම් AI reply එක ඇවිත්
+                return lastMsg.length > 0 && 
+                       !lastMsg.toLowerCase().includes(userQ.toLowerCase()) && 
+                       !lastMsg.includes("මම Dialog Axiata PLC");
+            },
+            { timeout: 30000 },
+            question
         );
 
-        console.log("✅ [STEP 7] Streaming text...");
+        console.log("✅ [STEP 6] AI is responding! Catching text...");
         
-        // Dialog AI එක ටිකක් වෙලා ගන්නවා reply එක සම්පූර්ණ කරන්න
-        // ඒ නිසා loop එකක් ඇතුළේ text එක වෙනස් වෙන එක නතර වෙනකම් බලමු
-        let lastText = "";
-        for (let i = 0; i < 6; i++) {
-            await new Promise(r => setTimeout(r, 2500));
-            const currentText = await page.evaluate(() => {
-                const msgs = document.querySelectorAll('.markdown-content');
+        // Streaming ඉවර වෙනකම් තත්පර 5ක් විතර ඉමු
+        let finalAnswer = "";
+        for (let i = 0; i < 5; i++) {
+            await new Promise(r => setTimeout(r, 2000));
+            finalAnswer = await page.evaluate(() => {
+                const msgs = document.querySelectorAll('[class*="markdown-content"]');
                 return msgs.length > 0 ? msgs[msgs.length - 1].innerText.trim() : "";
             });
-
-            if (currentText && currentText === lastText) {
-                break; // Text එක වෙනස් වෙන්නේ නැත්නම් ඒ කියන්නේ reply එක ඉවරයි
-            }
-            lastText = currentText;
-            console.log(`📥 Receiving chunk... (${currentText.length} chars)`);
+            console.log(`📥 Progress: ${finalAnswer.length} chars...`);
         }
 
-        console.log("🎯 [STEP 8] Final Response Captured!");
-        return { success: true, answer: lastText };
+        return { success: true, answer: finalAnswer };
 
     } catch (e) {
-        console.error("❌ Error Logs:", e.message);
+        console.error("❌ Final Error Log:", e.message);
         return { success: false, error: e.message };
     } finally {
         if (browser) await browser.close();
