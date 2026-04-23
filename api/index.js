@@ -30,64 +30,80 @@ const CARTOONS_BASE = "https://cartoons.lk";
 const HEROKU_CHROME_PATH = '/app/.chrome-for-testing/chrome-linux64/chrome';
 
 //-------DIALOG AI-------
-async function askDialogAI(question) {
+async function askQuillBot(question) {
     let browser;
-    let page; // Scope එක මෙතනට ගත්තා crash එක නවත්තන්න
     try {
-        console.log("🚀 [STEP 1] Launching Browser...");
+        console.log("🚀 Launching QuillBot...");
         browser = await puppeteer.launch({
-            executablePath: HEROKU_CHROME_PATH,
+            executablePath: process.env.HEROKU_CHROME_PATH || null,
             headless: true,
-            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu']
+            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
         });
 
-        page = await browser.newPage();
+        const page = await browser.newPage();
+        
+        // Browser එකක් වගේ ඇත්තටම පෙන්නන්න UA එකක් දාමු
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36');
 
-        console.log("🌐 [STEP 2] Navigating...");
-        // Fast navigation: networkidle2 වෙනකම් ඉන්නේ නැතුව load වෙනකම් විතරක් ඉමු
-        await page.goto('https://ai.dialog.lk/', { waitUntil: 'load', timeout: 20000 });
+        console.log("🌐 Navigating to QuillBot...");
+        await page.goto('https://quillbot.com/ai-chat', { 
+            waitUntil: 'domcontentloaded', 
+            timeout: 30000 
+        });
 
-        const inputSelector = 'textarea';
-        await page.waitForSelector(inputSelector, { timeout: 10000 });
+        // Chat input එක එනකම් ඉමු (මේ selector එක QuillBot එකේ textarea එකට අදාළයි)
+        const inputSelector = 'textarea#chat-input-textarea'; 
+        await page.waitForSelector(inputSelector, { timeout: 15000 });
 
-        // කලින් තිබ්බ පණිවිඩ ගණන
-        const initialCount = await page.evaluate(() => document.querySelectorAll('.markdown-content').length);
-
-        console.log(`✍️ [STEP 3] Sending: ${question}`);
-        await page.focus(inputSelector);
+        console.log(`✍️ Sending Message: ${question}`);
         await page.type(inputSelector, question);
         await page.keyboard.press('Enter');
 
-        console.log("⏳ [STEP 4] Waiting for AI...");
+        console.log("⏳ Waiting for Response...");
 
-        // Heroku timeout එකට කලින් වැඩේ ඉවර කරන්න ඕනේ නිසා 
-        // අපි MutationObserver එක වෙනුවට අලුත් පණිවිඩයක් එනකම් සරලව බලමු
-        const aiAnswer = await page.evaluate(async (prevCount) => {
+        // Response එක එනකම් බලන් ඉන්න logic එක
+        // QuillBot එකේ සාමාන්‍යයෙන් response එක එන්නේ ටික ටික (streaming)
+        // ඒ නිසා අපි එකම message එක තප්පර කීපයක් වෙනස් නොවී තියෙනවද කියලා බලමු
+        let lastResponse = "";
+        let stableCount = 0;
+
+        const aiAnswer = await page.evaluate(async () => {
             return new Promise((resolve) => {
-                let attempts = 0;
-                const check = setInterval(() => {
-                    const msgs = document.querySelectorAll('.markdown-content');
-                    // අලුත් පණිවිඩයක් ඇවිත් නම් සහ ඒක "Guest" notification එක නෙවෙයි නම්
-                    if (msgs.length > prevCount) {
-                        const lastMsg = msgs[msgs.length - 1].innerText.trim();
-                        if (lastMsg.length > 2) { 
-                            clearInterval(check);
-                            resolve(lastMsg);
-                        }
+                let prevText = "";
+                let noChangeRounds = 0;
+
+                const timer = setInterval(() => {
+                    // QuillBot එකේ අවසාන උත්තරය තියෙන div එකේ class එක මෙතනට එන්න ඕනේ
+                    // දැනට අපි පොදු selector එකක් පාවිච්චි කරමු
+                    const bubbles = document.querySelectorAll('.markdown-content');
+                    const lastBubble = bubbles[bubbles.length - 1];
+                    const currentText = lastBubble ? lastBubble.innerText.trim() : "";
+
+                    if (currentText && currentText === prevText) {
+                        noChangeRounds++;
+                    } else {
+                        noChangeRounds = 0;
+                        prevText = currentText;
                     }
-                    if (attempts > 60) { // තත්පර 15ක් බැලුවා ආවේ නැත්නම් නවත්තනවා
-                        clearInterval(check);
-                        resolve("TIMEOUT");
+
+                    // තත්පර 3ක් තිස්සේ message එක වෙනස් වුණේ නැත්නම් ඒ කියන්නේ උත්තරය දීලා ඉවරයි
+                    if (noChangeRounds > 12 && currentText.length > 0) { 
+                        clearInterval(timer);
+                        resolve(currentText);
                     }
-                    attempts++;
-                }, 250); // හැම 250ms කටම සැරයක් චෙක් කරනවා (Very Fast)
+                }, 250);
+
+                // උපරිම තත්පර 25ක් බලනවා
+                setTimeout(() => {
+                    clearInterval(timer);
+                    resolve("TIMEOUT");
+                }, 25000);
             });
-        }, initialCount);
+        });
 
-        if (aiAnswer === "TIMEOUT") throw new Error("AI response late");
+        if (aiAnswer === "TIMEOUT") throw new Error("QuillBot took too long!");
 
-        console.log("🎯 [STEP 5] Done!");
+        console.log("🎯 Response Received!");
         return { success: true, answer: aiAnswer };
 
     } catch (e) {
@@ -688,7 +704,7 @@ app.get('/api/dialog/chat', async (req, res) => {
     const q = req.query.q;
     if (!q) return res.json({ success: false, error: "Question (q) is required" });
     
-    const result = await askDialogAI(q);
+    const result = await askQuillBot(q);
     res.json(result);
 });
 
