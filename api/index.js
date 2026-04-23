@@ -35,7 +35,7 @@ async function askDialogAI(question) {
     try {
         console.log("🚀 Launching Dialog AI Sniper...");
         browser = await puppeteer.launch({
-            executablePath: HEROKU_CHROME_PATH, // ඔයාගේ code එකේ තියෙන path එකමයි
+            executablePath: HEROKU_CHROME_PATH,
             headless: true,
             args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
         });
@@ -43,33 +43,36 @@ async function askDialogAI(question) {
         const page = await browser.newPage();
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36');
 
-        // 1. Dialog AI පේජ් එකට යනවා
         await page.goto('https://ai.dialog.lk/', { waitUntil: 'networkidle2', timeout: 60000 });
 
-        // 2. Chat box එක එනකම් ඉන්නවා
-        const inputSelector = 'textarea#chat-input'; // මේක සයිට් එකේ ඇත්ත ID එක අනුව වෙනස් වෙන්න පුළුවන්
+        // 1. නිකන්ම textarea එක එනකම් ඉන්නවා (ID එක නැතුව)
+        const inputSelector = 'textarea'; 
         await page.waitForSelector(inputSelector, { timeout: 20000 });
 
-        // 3. කලින් තිබුණු messages ගණන බලනවා (අලුත් එක අඳුරගන්න)
-        const initialMsgCount = await page.evaluate(() => document.querySelectorAll('.message-content').length);
+        // 2. දැනට තියෙන පණිවිඩ ගණන
+        const initialCount = await page.evaluate(() => document.querySelectorAll('.prose').length);
 
-        // 4. ප්‍රශ්නය ටයිප් කරලා යවනවා
+        // 3. ප්‍රශ්නය ටයිප් කරනවා
         await page.type(inputSelector, question);
+        
+        // 4. Enter ප්‍රෙස් කරනවා
         await page.keyboard.press('Enter');
 
-        console.log("⏳ Waiting for Dialog AI to respond...");
+        console.log("⏳ Waiting for response...");
 
-        // 5. අලුත් message එකක් එනකම් ඉන්නවා (Max 30s)
+        // 5. අලුත් පණිවිඩයක් එනකම් ඉන්නවා (.prose class එක තමයි උත්තරේට පාවිච්චි වෙන්නේ)
         await page.waitForFunction(
-            (prevCount) => document.querySelectorAll('.message-content').length > prevCount,
+            (prevCount) => document.querySelectorAll('.prose').length > prevCount,
             { timeout: 30000 },
-            initialMsgCount
+            initialCount
         );
 
-        // 6. අන්තිමට ආපු උත්තරේ ගන්නවා
+        // පොඩි වෙලාවක් ඉමු අකුරු ටික වැටෙනකම්
+        await new Promise(r => setTimeout(r, 2000));
+
+        // 6. අන්තිම උත්තරේ ගන්නවා
         const aiResponse = await page.evaluate(() => {
-            const messages = document.querySelectorAll('.message-content');
-            // අන්තිම message එක අරගෙන ඒකේ text එක දෙනවා
+            const messages = document.querySelectorAll('.prose');
             return messages[messages.length - 1].innerText.trim();
         });
 
