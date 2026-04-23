@@ -30,7 +30,6 @@ const CARTOONS_BASE = "https://cartoons.lk";
 const HEROKU_CHROME_PATH = '/app/.chrome-for-testing/chrome-linux64/chrome';
 
 //-------DIALOG AI-------
-//-------DIALOG AI (FINAL FIX)-------
 async function askDialogAI(question) {
     let browser;
     try {
@@ -50,45 +49,52 @@ async function askDialogAI(question) {
         const inputSelector = 'textarea';
         await page.waitForSelector(inputSelector, { timeout: 15000 });
 
-        console.log(`✍️ [STEP 4] Sending Question...`);
+        // කලින් තිබ්බ AI පණිවිඩ (justify-start) ගණන බලමු
+        const initialAICount = await page.evaluate(() => 
+            document.querySelectorAll('.justify-start .markdown-content').length
+        );
+        console.log(`📊 Current AI messages: ${initialAICount}`);
+
+        console.log(`✍️ [STEP 4] Sending Question: ${question}`);
         await page.focus(inputSelector);
         await page.type(inputSelector, question);
         await page.keyboard.press('Enter');
 
-        console.log("⏳ [STEP 5] Waiting for Real Response...");
+        console.log("⏳ [STEP 5] Waiting for AI response...");
         
-        // පියවර 5: අන්තිම message එක අපේ ප්‍රශ්නය නෙවෙයි නම් සහ ඒකෙ text එකක් තියෙනවා නම් විතරක් ඉදිරියට යමු
+        // AI එකේ අලුත් පණිවිඩයක් (justify-start ඇතුළේ තියෙන එකක්) එනකම් බලනවා
         await page.waitForFunction(
-            (userQ) => {
-                const msgs = document.querySelectorAll('[class*="markdown-content"]');
-                if (msgs.length === 0) return false;
-                const lastMsg = msgs[msgs.length - 1].innerText.trim();
-                // අන්තිම message එක අපේ ප්‍රශ්නය නෙවෙයි නම් සහ Welcome message එක නෙවෙයි නම් AI reply එක ඇවිත්
-                return lastMsg.length > 0 && 
-                       !lastMsg.toLowerCase().includes(userQ.toLowerCase()) && 
-                       !lastMsg.includes("මම Dialog Axiata PLC");
+            (prevCount) => {
+                const current = document.querySelectorAll('.justify-start .markdown-content').length;
+                return current > prevCount;
             },
-            { timeout: 30000 },
-            question
+            { timeout: 25000 },
+            initialAICount
         );
 
-        console.log("✅ [STEP 6] AI is responding! Catching text...");
+        console.log("✅ [STEP 6] AI started typing...");
         
-        // Streaming ඉවර වෙනකම් තත්පර 5ක් විතර ඉමු
+        // උත්තරේ සම්පූර්ණ වෙනකම් පොඩි වෙලාවක් ඉමු
         let finalAnswer = "";
         for (let i = 0; i < 5; i++) {
             await new Promise(r => setTimeout(r, 2000));
             finalAnswer = await page.evaluate(() => {
-                const msgs = document.querySelectorAll('[class*="markdown-content"]');
-                return msgs.length > 0 ? msgs[msgs.length - 1].innerText.trim() : "";
+                const aiMsgs = document.querySelectorAll('.justify-start .markdown-content');
+                return aiMsgs.length > 0 ? aiMsgs[aiMsgs.length - 1].innerText.trim() : "";
             });
-            console.log(`📥 Progress: ${finalAnswer.length} chars...`);
+            
+            // Welcome message එක අහු වුණොත් ආයෙත් loop වෙනවා (අන්තිම එක ගන්නකම්)
+            if (finalAnswer.length > 5 && !finalAnswer.includes("මම Dialog Axiata")) {
+                console.log("📥 Capturing data...");
+                break;
+            }
         }
 
+        console.log("🎯 [STEP 7] Success!");
         return { success: true, answer: finalAnswer };
 
     } catch (e) {
-        console.error("❌ Final Error Log:", e.message);
+        console.error("❌ Error Logs:", e.message);
         return { success: false, error: e.message };
     } finally {
         if (browser) await browser.close();
