@@ -35,9 +35,15 @@ async function askDialogAI(question) {
     try {
         console.log("🚀 Launching Dialog AI Sniper...");
         browser = await puppeteer.launch({
-            executable_path: HEROKU_CHROME_PATH,
+            // ඔයාගේ අනිත් functions වල තියෙන විදිහටම path එක මෙතනට ගත්තා
+            executablePath: HEROKU_CHROME_PATH, 
             headless: true,
-            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+            args: [
+                '--no-sandbox', 
+                '--disable-setuid-sandbox', 
+                '--disable-dev-shm-usage',
+                '--disable-blink-features=AutomationControlled'
+            ]
         });
 
         const page = await browser.newPage();
@@ -49,27 +55,28 @@ async function askDialogAI(question) {
         const inputSelector = 'textarea';
         await page.waitForSelector(inputSelector, { timeout: 10000 });
 
-        // Screenshot එකට අනුව දැනට තියෙන පණිවිඩ ගණන
+        // කලින් තිබ්බ පණිවිඩ ගණන (අලුත් එක අඳුරගන්න)
         const initialCount = await page.evaluate(() => document.querySelectorAll('.markdown-content').length);
 
+        // ප්‍රශ්නය ටයිප් කරලා Enter කරනවා
         await page.type(inputSelector, question);
         await page.keyboard.press('Enter');
 
         console.log("⏳ Waiting for response...");
 
-        // .markdown-content එකක් අලුතින් එනකම් විතරක් බලන් ඉන්නවා
+        // .markdown-content එකක් අලුතින් එනකම් (count එක වැඩි වෙනකම්) බලන් ඉන්නවා
         await page.waitForFunction(
             (prevCount) => document.querySelectorAll('.markdown-content').length > prevCount,
-            { timeout: 20000 }, // Heroku timeout වෙන්න කලින් මේක ඉවර කරන්න ඕනේ
+            { timeout: 20000 },
             initialCount
         );
 
-        // තත්පර 2ක් විතර ඉමු අන්තිම ටික වැටෙනකම්
+        // අකුරු ටික සම්පූර්ණයෙන් වැටෙනකම් තත්පර 2ක් ඉමු
         await new Promise(r => setTimeout(r, 2000));
 
         const aiResponse = await page.evaluate(() => {
             const messages = document.querySelectorAll('.markdown-content');
-            // අන්තිම message එකේ තියෙන 'p' tag එකේ text එක ගන්නවා
+            // අන්තිමටම ඇඩ් වුණු (AI එකේ) message එක ගන්නවා
             const lastMsg = messages[messages.length - 1];
             return lastMsg ? lastMsg.innerText.trim() : "No text found";
         });
