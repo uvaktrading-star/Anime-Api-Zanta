@@ -29,95 +29,6 @@ const ANIME_BASE = "https://animeheaven.me";
 const CARTOONS_BASE = "https://cartoons.lk";
 const HEROKU_CHROME_PATH = '/app/.chrome-for-testing/chrome-linux64/chrome';
 
-//-------DIALOG AI-------
-async function askQuillBot(question) {
-    let browser;
-    try {
-        console.log("🚀 Launching QuillBot Sniper...");
-        
-        // ඔයාගේ Anime API එකේ විදිහටම launch configuration එක
-        browser = await puppeteer.launch({
-            executablePath: HEROKU_CHROME_PATH, // කෙලින්ම path එක මෙතනට දෙනවා
-            headless: true,
-            args: [
-                '--no-sandbox', 
-                '--disable-setuid-sandbox', 
-                '--disable-dev-shm-usage',
-                '--disable-blink-features=AutomationControlled' // AI detection අඩු කරන්න
-            ]
-        });
-
-        const page = await browser.newPage();
-        
-        // Real Browser එකක් විදිහට පෙනී සිටින්න
-        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36');
-
-        console.log("🌐 Navigating to QuillBot AI Chat...");
-        await page.goto('https://quillbot.com/ai-chat', { 
-            waitUntil: 'networkidle2', // හොඳට load වෙනකම් ඉමු
-            timeout: 35000 
-        });
-
-        // Chat input එක එනකම් ඉන්නවා
-        const inputSelector = 'textarea#chat-input-textarea'; 
-        await page.waitForSelector(inputSelector, { timeout: 15000 });
-
-        console.log(`✍️ Typing: ${question}`);
-        await page.focus(inputSelector);
-        await page.type(inputSelector, question, { delay: 50 }); // ටිකක් හිමින් type කරමු natural වෙන්න
-        await page.keyboard.press('Enter');
-
-        console.log("⏳ Waiting for streaming response...");
-
-        // Response එක capture කරන logic එක
-        const aiAnswer = await page.evaluate(async () => {
-            return new Promise((resolve) => {
-                let prevText = "";
-                let noChangeRounds = 0;
-                let attempts = 0;
-
-                const timer = setInterval(() => {
-                    const bubbles = document.querySelectorAll('.markdown-content');
-                    const lastBubble = bubbles[bubbles.length - 1];
-                    const currentText = lastBubble ? lastBubble.innerText.trim() : "";
-
-                    if (currentText && currentText === prevText) {
-                        noChangeRounds++;
-                    } else {
-                        noChangeRounds = 0;
-                        prevText = currentText;
-                    }
-
-                    // තත්පර 3ක් විතර එකම text එක තිබ්බොත් response එක ඉවරයි කියලා ගන්නවා
-                    if (noChangeRounds > 10 && currentText.length > 2) { 
-                        clearInterval(timer);
-                        resolve(currentText);
-                    }
-
-                    if (attempts > 80) { // Max 20 sec wait
-                        clearInterval(timer);
-                        resolve(currentText || "TIMEOUT");
-                    }
-                    attempts++;
-                }, 250);
-            });
-        });
-
-        if (aiAnswer === "TIMEOUT") throw new Error("QuillBot response capture timed out.");
-
-        console.log("🎯 Success! Answer Captured.");
-        return { success: true, answer: aiAnswer };
-
-    } catch (e) {
-        console.error("❌ QuillBot Error:", e.message);
-        return { success: false, error: e.message };
-    } finally {
-        if (browser) {
-            await browser.close();
-            console.log("🔌 Browser Closed.");
-        }
-    }
-}
 //-------CINESUBZ---------
 async function getCinesubzAxiosHTML(targetUrl) {
     try {
@@ -701,14 +612,6 @@ async function getCartoonDownload(inputUrl) {
         if (browser) await browser.close();
     }
 }
-
-app.get('/api/dialog/chat', async (req, res) => {
-    const q = req.query.q;
-    if (!q) return res.json({ success: false, error: "Question (q) is required" });
-    
-    const result = await askQuillBot(q);
-    res.json(result);
-});
 
 // Search: http://localhost:5000/api/cartoons/search?q=harry+potter
 app.get('/api/cartoons/search', async (req, res) => {
