@@ -33,29 +33,45 @@ const EPORNER_URL = "https://www.eporner.com";
 //--------E PORNER---------
 async function searchEporner(query) {
     try {
-        const searchPath = encodeURIComponent(query).replace(/%20/g, '-');
-        const url = `${EPORNER_URL}/search/${searchPath}/`;
+        // 1. Search Query එක නිවැරදිව Format කිරීම
+        // බොහෝ වෙබ් අඩවි වල space එක වෙනුවට '-' භාවිතා වේ.
+        const searchPath = query.trim().replace(/\s+/g, '-');
+        
+        // සෘජුවම search-videos හෝ tag පිටුවට යාම වඩාත් සාර්ථකයි
+        const url = `${EPORNER_URL}/search/${encodeURIComponent(searchPath)}/`;
 
         const { data } = await axios.get(url, {
             headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
-            }
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+                'Accept-Language': 'en-US,en;q=0.9'
+            },
+            // Redirects වලදී ඇතිවන ගැටලු මගහැරීමට මෙය වැදගත් වේ
+            maxRedirects: 5 
         });
 
         const $ = cheerio.load(data);
         let results = [];
 
-        // image_a21c99.jpg සහ image_a22bdf.jpg අනුව selectors
+        // 2. Selectors පරීක්ෂාව
         $('div.mb').each((i, el) => {
-            const titleElement = $(el).find('.mbtit a');
-            const imgElement = $(el).find('.mbimg img');
+            const container = $(el);
+            const titleElement = container.find('.mbtit a');
+            const imgElement = container.find('.mbimg img');
             
+            // 3. Lazy Loaded images සඳහා data-src හෝ src ලබා ගැනීම
+            // මුලින්ම data-src පරීක්ෂා කර එය නැත්නම් src ලබා ගනී.
+            let thumb = imgElement.attr('data-src') || imgElement.attr('src');
+            
+            // Placeholder images මගහැරීමට (gif images)
+            if (thumb && thumb.includes('.gif')) {
+                thumb = imgElement.attr('data-src'); 
+            }
+
             const title = titleElement.text().trim();
             const link = titleElement.attr('href');
-            const thumb = imgElement.attr('src') || imgElement.attr('data-src');
-            const duration = $(el).find('.mbtim').text().trim();
-            const quality = $(el).find('.mvhdico').text().trim();
-            const views = $(el).find('.mbvie').text().trim();
+            const duration = container.find('.mbtim').text().trim();
+            const quality = container.find('.mvhdico').text().trim();
+            const views = container.find('.mbvie').text().trim();
 
             if (title && link) {
                 results.push({
@@ -69,9 +85,17 @@ async function searchEporner(query) {
             }
         });
 
-        return { success: true, count: results.length, results };
+        return { 
+            success: true, 
+            count: results.length, 
+            results 
+        };
+
     } catch (e) {
-        return { success: false, error: e.message };
+        return { 
+            success: false, 
+            error: e.message 
+        };
     }
 }
 
