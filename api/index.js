@@ -38,7 +38,7 @@ async function searchEporner(query) {
         const searchPath = query.trim().replace(/\s+/g, '-');
         
         // සෘජුවම search-videos හෝ tag පිටුවට යාම වඩාත් සාර්ථකයි
-        const url = `${EPORNER_URL}/search/${encodeURIComponent(searchPath)}/`;
+        const url = `${EPORNER_URL}/tag/${encodeURIComponent(searchPath)}/`;
 
         const { data } = await axios.get(url, {
             headers: {
