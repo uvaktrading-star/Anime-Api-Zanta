@@ -28,6 +28,111 @@ const BASE_URL = "https://fitgirl-repacks.site";
 const ANIME_BASE = "https://animeheaven.me";
 const CARTOONS_BASE = "https://cartoons.lk";
 const HEROKU_CHROME_PATH = '/app/.chrome-for-testing/chrome-linux64/chrome';
+const EPORNER_URL = "https://www.eporner.com";
+
+//--------E PORNER---------
+async function searchEporner(query) {
+    try {
+        const searchPath = encodeURIComponent(query).replace(/%20/g, '-');
+        const url = `${EPORNER_URL}/search/${searchPath}/`;
+
+        const { data } = await axios.get(url, {
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+            }
+        });
+
+        const $ = cheerio.load(data);
+        let results = [];
+
+        // image_a21c99.jpg සහ image_a22bdf.jpg අනුව selectors
+        $('div.mb').each((i, el) => {
+            const titleElement = $(el).find('.mbtit a');
+            const imgElement = $(el).find('.mbimg img');
+            
+            const title = titleElement.text().trim();
+            const link = titleElement.attr('href');
+            const thumb = imgElement.attr('src') || imgElement.attr('data-src');
+            const duration = $(el).find('.mbtim').text().trim();
+            const quality = $(el).find('.mvhdico').text().trim();
+            const views = $(el).find('.mbvie').text().trim();
+
+            if (title && link) {
+                results.push({
+                    title,
+                    url: link.startsWith('http') ? link : `${EPORNER_URL}${link}`,
+                    thumbnail: thumb,
+                    duration,
+                    quality,
+                    views
+                });
+            }
+        });
+
+        return { success: true, count: results.length, results };
+    } catch (e) {
+        return { success: false, error: e.message };
+    }
+}
+
+// --- 2. Extract Download Links (Puppeteer Sniper) ---
+async function getEpornerDownloads(videoUrl) {
+    let browser;
+    try {
+        console.log("🚀 Launching Eporner Sniper...");
+        browser = await puppeteer.launch({
+            executablePath: HEROKU_CHROME_PATH,
+            headless: true,
+            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+        });
+
+        const page = await browser.newPage();
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
+
+        await page.goto(videoUrl, { waitUntil: 'networkidle2', timeout: 30000 });
+
+        // image_a298b8.png අනුව 'Download' tab එක හෝ button එක click කිරීම
+        // Eporner වල සාමාන්‍යයෙන් download links පේන්නේ button එකක් click කළාමයි
+        const dlBtnSelector = '#hd-porn-dload, .dload'; 
+        try {
+            await page.waitForSelector(dlBtnSelector, { timeout: 5000 });
+            await page.click(dlBtnSelector);
+            await new Promise(r => setTimeout(r, 2000)); // Content load වෙන්න වෙලාව
+        } catch (err) {
+            console.log("Download button not found or already open.");
+        }
+
+        const html = await page.content();
+        const $ = cheerio.load(html);
+        let downloadLinks = [];
+
+        // image_a298b8.png එකේ තියෙන පියවරවල් අනුව
+        $('#dloaddivcol span.download-h264 a, #dloaddivcol span.download-av1 a').each((i, el) => {
+            const link = $(el).attr('href');
+            const text = $(el).text().trim(); // උදා: "Download MP4 (1080p, 1563.29 MB)"
+            
+            if (link) {
+                downloadLinks.push({
+                    quality: text.split('(')[1]?.split(',')[0] || "Unknown",
+                    size: text.split(',')[1]?.replace(')', '').trim() || "Unknown",
+                    url: link.startsWith('http') ? link : `${EPORNER_URL}${link}`
+                });
+            }
+        });
+
+        return { 
+            success: true, 
+            title: $('h1').first().text().trim(),
+            downloads: downloadLinks 
+        };
+
+    } catch (e) {
+        console.error("Puppeteer Error:", e.message);
+        return { success: false, error: e.message };
+    } finally {
+        if (browser) await browser.close();
+    }
+}
 
 //-------CINESUBZ---------
 async function getCinesubzAxiosHTML(targetUrl) {
@@ -613,6 +718,19 @@ async function getCartoonDownload(inputUrl) {
     }
 }
 
+app.get('/api/eporner/search', async (req, res) => {
+    const { q } = req.query;
+    if (!q) return res.json({ success: false, error: "Search query required" });
+    res.json(await searchEporner(q));
+});
+
+// Download: /api/eporner/download?url=https://www.eporner.com/video-xxx/
+app.get('/api/eporner/download', async (req, res) => {
+    const { url } = req.query;
+    if (!url) return res.json({ success: false, error: "Video URL required" });
+    res.json(await getEpornerDownloads(url));
+});
+
 // Search: http://localhost:5000/api/cartoons/search?q=harry+potter
 app.get('/api/cartoons/search', async (req, res) => {
     const query = req.query.q;
@@ -643,7 +761,6 @@ app.get('/api/cinesubz/extract-axios', async (req, res) => {
 app.get('/api/anime/search', async (req, res) => res.json(await searchAnime(req.query.q)));
 app.get('/api/anime/episodes', async (req, res) => res.json(await getEpisodes(req.query.url)));
 app.get('/api/anime/download', async (req, res) => res.json(await getDirectAnimeLink(req.query.url, req.query.ep)));
-app.get('/api/search', async (req, res) => res.json(await searchGames(req.query.q)));
 app.get('/api/search', async (req, res) => res.json(await searchGames(req.query.q)));
 app.get('/api/files', async (req, res) => res.json(await getGameFiles(req.query.url)));
 app.get('/api/datanodes', async (req, res) => res.json(await getDirectDownload(req.query.url)));
