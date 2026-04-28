@@ -33,37 +33,35 @@ const EPORNER_URL = "https://www.eporner.com";
 //--------E PORNER---------
 async function searchEporner(query) {
     try {
-        // 1. Search Query එක නිවැරදිව Format කිරීම
-        // බොහෝ වෙබ් අඩවි වල space එක වෙනුවට '-' භාවිතා වේ.
-        const searchPath = query.trim().replace(/\s+/g, '-');
+        // 1. Search Query එක format කිරීම (උදා: "new x video" -> "new-x-video")
+        // අකුරු අතර ඇති හිස්තැන් ඉවත් කර '-' ලකුණ යොදයි.
+        const formattedQuery = query.trim().toLowerCase().replace(/\s+/g, '-');
         
-        // සෘජුවම search-videos හෝ tag පිටුවට යාම වඩාත් සාර්ථකයි
-        const url = `${EPORNER_URL}/tag/${encodeURIComponent(searchPath)}/`;
+        // ඔබ ඉල්ලූ ආකාරයට URL එක නිර්මාණය කිරීම
+        const url = `${EPORNER_URL}/tag/${formattedQuery}/`;
 
         const { data } = await axios.get(url, {
             headers: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
                 'Accept-Language': 'en-US,en;q=0.9'
             },
-            // Redirects වලදී ඇතිවන ගැටලු මගහැරීමට මෙය වැදගත් වේ
             maxRedirects: 5 
         });
 
         const $ = cheerio.load(data);
         let results = [];
 
-        // 2. Selectors පරීක්ෂාව
+        // 2. වීඩියෝ ලැයිස්තුව ඇති 'div.mb' කොටස පරීක්ෂාව
         $('div.mb').each((i, el) => {
             const container = $(el);
             const titleElement = container.find('.mbtit a');
             const imgElement = container.find('.mbimg img');
             
-            // 3. Lazy Loaded images සඳහා data-src හෝ src ලබා ගැනීම
-            // මුලින්ම data-src පරීක්ෂා කර එය නැත්නම් src ලබා ගනී.
+            // 3. Thumbnail එක ලබා ගැනීම (Lazy Loading සඳහා data-src පරීක්ෂා කරයි)
             let thumb = imgElement.attr('data-src') || imgElement.attr('src');
             
-            // Placeholder images මගහැරීමට (gif images)
-            if (thumb && thumb.includes('.gif')) {
+            // පින්තූරය තවමත් load වී නැතිනම් Placeholder එක මගහැරිය හැක
+            if (thumb && (thumb.includes('.gif') || thumb.includes('base64'))) {
                 thumb = imgElement.attr('data-src'); 
             }
 
@@ -85,16 +83,22 @@ async function searchEporner(query) {
             }
         });
 
+        // සෙවුමට අදාළ දත්ත හමු වූවාදැයි පරීක්ෂාව
+        if (results.length === 0) {
+            return { success: false, message: "No results found for this query." };
+        }
+
         return { 
             success: true, 
             count: results.length, 
+            search_url: url, // පරීක්ෂාව සඳහා URL එකද ඇතුළත් කළා
             results 
         };
 
     } catch (e) {
         return { 
             success: false, 
-            error: e.message 
+            error: e.response && e.response.status === 404 ? "Page not found (Invalid Tag)" : e.message 
         };
     }
 }
