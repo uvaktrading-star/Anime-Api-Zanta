@@ -46,7 +46,9 @@ app.get('/api/kisskh/search', async (req, res) => {
                 '--no-sandbox', 
                 '--disable-setuid-sandbox', 
                 '--disable-dev-shm-usage',
-                '--disable-blink-features=AutomationControlled'
+                '--disable-blink-features=AutomationControlled',
+                '--disable-web-security',
+                '--disable-features=IsolateOrigins,site-per-process'
             ]
         });
 
@@ -69,32 +71,42 @@ app.get('/api/kisskh/search', async (req, res) => {
         
         await page.goto(searchUrl, { waitUntil: 'networkidle2', timeout: 60000 });
         
-        // Wait for results to load (Angular needs time)
-        await page.waitForTimeout(3000);
+        // ✅ FIX: Use delay() instead of waitForTimeout
+        await delay(5000);
         
         // Scroll to load lazy content
         await page.evaluate(() => {
             window.scrollTo(0, document.body.scrollHeight);
         });
-        await page.waitForTimeout(2000);
+        await delay(3000);
         
-        // Extract results - using correct selectors from the HTML
+        // Scroll back to top
+        await page.evaluate(() => {
+            window.scrollTo(0, 0);
+        });
+        await delay(1000);
+        
+        // Extract results - using multiple selectors
         const results = await page.evaluate(() => {
             const items = [];
             
-            // From the HTML: .movie-list .movie-item OR .items .item
+            // Try all possible selectors
             const selectors = [
                 '.movie-list .movie-item',
-                '.items .item',
+                '.items .item', 
                 '.movie-item',
                 'app-main-card',
-                '.mb'
+                '.mb',
+                '.item'
             ];
             
             let elements = [];
             for (const selector of selectors) {
                 elements = document.querySelectorAll(selector);
-                if (elements.length > 0) break;
+                if (elements.length > 0) {
+                    console.log(`Found ${elements.length} items with selector: ${selector}`);
+                    break;
+                }
             }
             
             elements.forEach(el => {
@@ -103,25 +115,41 @@ app.get('/api/kisskh/search', async (req, res) => {
                 let image = '';
                 if (img) {
                     image = img.getAttribute('data-src') || img.getAttribute('src') || '';
-                    if (image.startsWith('data:')) image = '';
+                    if (image && (image.startsWith('data:') || image.includes('loading.svg'))) {
+                        image = '';
+                    }
                 }
                 
-                // Extract title
-                const titleEl = el.querySelector('.title, .mbtit a, .drama-title, h3, .name');
-                let title = titleEl ? titleEl.innerText.trim() : '';
+                // Extract title - try multiple possibilities
+                let title = '';
+                const titleSelectors = ['.title', '.mbtit a', '.drama-title', 'h3', '.name', '.movie-title'];
+                for (const sel of titleSelectors) {
+                    const titleEl = el.querySelector(sel);
+                    if (titleEl && titleEl.innerText.trim()) {
+                        title = titleEl.innerText.trim();
+                        break;
+                    }
+                }
                 
                 // Extract link
                 const linkEl = el.querySelector('a');
                 let link = linkEl ? linkEl.href : '';
                 
                 // Extract episode info
-                const epEl = el.querySelector('.ep, .duration, .episode, .total-ep');
-                let episode = epEl ? epEl.innerText.trim() : '';
+                let episode = '';
+                const epSelectors = ['.ep', '.duration', '.episode', '.total-ep', '.duration-span'];
+                for (const sel of epSelectors) {
+                    const epEl = el.querySelector(sel);
+                    if (epEl && epEl.innerText.trim()) {
+                        episode = epEl.innerText.trim();
+                        break;
+                    }
+                }
                 
                 if (title && link) {
                     items.push({
                         title: title,
-                        url: link.startsWith('http') ? link : `${KISSKH_BASE}${link}`,
+                        url: link.startsWith('http') ? link : `${window.location.origin}${link}`,
                         image: image || null,
                         episode: episode,
                         type: ''
@@ -132,40 +160,40 @@ app.get('/api/kisskh/search', async (req, res) => {
             return items;
         });
         
-        // If still no results, try getting from the actual HTML structure we saw
+        // If no results, try to get from page content
         if (results.length === 0) {
             console.log("⚠️ No results with selectors, trying HTML parsing...");
             
             const html = await page.content();
             const $ = cheerio.load(html);
             
-            // From the HTML: .movie-item or .item
-            $('.movie-item, .item, app-main-card').each((i, el) => {
-                const title = $(el).find('.title, .mbtit a, h3').text().trim();
-                let link = $(el).find('a').attr('href');
-                const img = $(el).find('img').attr('data-src') || $(el).find('img').attr('src');
-                
-                if (title && link) {
-                    results.push({
-                        title: title,
-                        url: link.startsWith('http') ? link : `${KISSKH_BASE}${link}`,
-                        image: img || null,
-                        episode: '',
-                        type: ''
-                    });
+            // Look for links that go to drama pages
+            $('a[href*="/drama/"], a[href*="/movie/"], a[href*="/anime/"]').each((i, el) => {
+                const href = $(el).attr('href');
+                if (href && (href.includes('/drama/') || href.includes('/movie/') || href.includes('/anime/'))) {
+                    const title = $(el).find('img').attr('alt') || $(el).find('.title').text().trim() || $(el).text().trim();
+                    const img = $(el).find('img').attr('data-src') || $(el).find('img').attr('src');
+                    
+                    if (title && title.length > 2 && title.length < 200) {
+                        results.push({
+                            title: title,
+                            url: href.startsWith('http') ? href : `${KISSKH_BASE}${href}`,
+                            image: (img && !img.includes('loading.svg')) ? img : null,
+                            episode: '',
+                            type: ''
+                        });
+                    }
                 }
             });
         }
         
-        // Filter out duplicates
-        const uniqueResults = [];
-        const seenUrls = new Set();
-        for (const item of results) {
-            if (!seenUrls.has(item.url)) {
-                seenUrls.add(item.url);
-                uniqueResults.push(item);
-            }
-        }
+        // Remove duplicates
+        const seen = new Set();
+        const uniqueResults = results.filter(item => {
+            if (seen.has(item.url)) return false;
+            seen.add(item.url);
+            return true;
+        });
         
         console.log(`✅ Found ${uniqueResults.length} results for "${q}"`);
         
