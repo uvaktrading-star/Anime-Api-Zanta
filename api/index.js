@@ -57,7 +57,7 @@ app.get('/api/9jarocks/search', async (req, res) => {
         const page = await browser.newPage();
         await page.setViewport({ width: 1280, height: 800 });
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
-
+        
         // ✅ Correct URL as you mentioned
         const searchUrl = `${JAROCKS_BASE}/findx?search=${encodeURIComponent(q)}`;
         console.log(`📄 Loading: ${searchUrl}`);
@@ -73,75 +73,48 @@ app.get('/api/9jarocks/search', async (req, res) => {
         // Check if Cloudflare challenge is present
         const pageTitle = await page.title();
         if (pageTitle.includes('Just a moment')) {
-            console.log("⚠️ Cloudflare challenge detected, waiting...");
+            console.log("⚠️ Cloudflare challenge detected, waiting longer...");
             await delay(15000);
         }
         
-        // Extract results from the page
-        const results = await page.evaluate(() => {
-            const items = [];
+        // Now extract results from the full HTML
+        const html = await page.content();
+        const $ = cheerio.load(html);
+        
+        const results = [];
+        
+        // ✅ Use the exact selector from your HTML
+        $('.posts-items .post-item, .posts-items li.post-item').each((i, el) => {
+            // Get title and link
+            const titleEl = $(el).find('.post-title a, h2 a');
+            const title = titleEl.text().trim();
+            const link = titleEl.attr('href');
             
-            // Look for post items using the correct selectors from your HTML
-            const selectors = [
-                '.posts-items li',
-                '.post-item',
-                '.mag-box .post-item',
-                '.tie-standard'
-            ];
-            
-            let elements = [];
-            for (const selector of selectors) {
-                elements = document.querySelectorAll(selector);
-                if (elements.length > 0) {
-                    console.log(`Found ${elements.length} items with selector: ${selector}`);
-                    break;
+            // Get image
+            let image = '';
+            const imgEl = $(el).find('.post-thumb img');
+            if (imgEl.length > 0) {
+                image = imgEl.attr('src') || imgEl.attr('data-src') || '';
+                if (image && image.includes('lazy-img')) {
+                    image = imgEl.attr('data-src') || imgEl.attr('src');
                 }
             }
             
-            elements.forEach(el => {
-                // Get title
-                const titleEl = el.querySelector('.post-title a, h2 a');
-                let title = titleEl ? titleEl.innerText.trim() : '';
-                
-                // Get link
-                let link = '';
-                if (titleEl) {
-                    link = titleEl.href;
-                } else {
-                    const linkEl = el.querySelector('a');
-                    link = linkEl ? linkEl.href : '';
-                }
-                
-                // Get image
-                const img = el.querySelector('img');
-                let image = '';
-                if (img) {
-                    image = img.src || img.getAttribute('data-src') || '';
-                    if (image && image.startsWith('data:')) {
-                        image = img.getAttribute('data-src') || '';
-                    }
-                }
-                
-                // Get date
-                const dateEl = el.querySelector('.date, .post-date, time');
-                let date = dateEl ? dateEl.innerText.trim() : '';
-                
-                // Get category
-                const catEl = el.querySelector('.post-cat');
-                let category = catEl ? catEl.innerText.trim() : '';
-                
-                if (title && link) {
-                    items.push({
-                        title: title,
-                        url: link,
-                        image: image || null,
-                        date: date || null,
-                        category: category || null
-                    });
-                }
-            });
+            // Get category
+            const category = $(el).find('.post-cat').text().trim();
             
-            return items;
+            // Get date
+            const date = $(el).find('.date, .post-date').text().trim();
+            
+            if (title && link) {
+                results.push({
+                    title: title,
+                    url: link,
+                    image: image || null,
+                    category: category || null,
+                    date: date || null
+                });
+            }
         });
         
         console.log(`✅ Found ${results.length} results for "${q}"`);
@@ -151,7 +124,7 @@ app.get('/api/9jarocks/search', async (req, res) => {
             creator: "ZANTA-MD",
             query: q,
             count: results.length,
-            results: results.slice(0, 30)
+            results: results.slice(0, 50)
         });
         
     } catch (error) {
