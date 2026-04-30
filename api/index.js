@@ -255,36 +255,6 @@ app.get('/api/9jarocks/video', async (req, res) => {
         res.status(500).json({ success: false, error: error.message });
     }
 });
-📋 API Endpoints
-Endpoint	Method	Parameters	Description
-/api/9jarocks/search	GET	q	Search for videos
-/api/9jarocks/details	GET	url	Get video details + download links
-/api/9jarocks/video	GET	url	Get video streaming sources
-🧪 Test Examples
-bash
-# Search
-curl "http://localhost:5000/api/9jarocks/search?q=new"
-
-# Get details (use URL from search results)
-curl "http://localhost:5000/api/9jarocks/details?url=https://www.9jarocks.net/videodownload/011ce-new-generation-season-1-id382192.html"
-📝 Response Format
-Search Response:
-json
-{
-  "success": true,
-  "creator": "ZANTA-MD",
-  "query": "new",
-  "count": 10,
-  "results": [
-    {
-      "title": "O11CE: New Generation Season 1 (Complete)",
-      "url": "https://www.9jarocks.net/videodownload/011ce-new-generation-season-1-id382192.html",
-      "image": "https://...jpg",
-      "excerpt": "...",
-      "date": "1 day ago"
-    }
-  ]
-}
 
 
 //-------CINESUBZ---------
