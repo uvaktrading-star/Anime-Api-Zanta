@@ -31,6 +31,11 @@ const CARTOONS_BASE = "https://cartoons.lk";
 const HEROKU_CHROME_PATH = '/app/.chrome-for-testing/chrome-linux64/chrome';
 
 
+function delay(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+
 app.get('/api/kisskh/search', async (req, res) => {
     const { q, type = 0 } = req.query;
     if (!q) return res.status(400).json({ success: false, message: "සෙවිය යුතු පදය ඇතුළත් කරන්න." });
