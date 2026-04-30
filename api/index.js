@@ -24,11 +24,16 @@ const HEADERS = {
     'Upgrade-Insecure-Requests': '1'
 };
 
+const KISSKH_API = "https://kisskh.do/api";
+
 const KISSKH_BASE = "https://kisskh.do";
 const BASE_URL = "https://fitgirl-repacks.site";
 const ANIME_BASE = "https://animeheaven.me";
 const CARTOONS_BASE = "https://cartoons.lk";
 const HEROKU_CHROME_PATH = '/app/.chrome-for-testing/chrome-linux64/chrome';
+
+const KISSKH_COOKIE = "_ga=GA1.1.2050396191.1777544387; g_state={\"i_l\":0,\"i_ll\":1777548707782,\"i_e\":{\"enable_itp_optimization\":0},\"i_et\":1777544383634,\"i_b\":\"4juSucuzsgQsCNJHa4hFCGeCFz/3FdAnNQbTrzU8TWI\"}; _ga_R3CRN9FY5Q=GS2.1.s1777544387$o1$g1$t1777548716$j28$l0$h0";
+
 
 
 function delay(ms) {
@@ -40,366 +45,80 @@ app.get('/api/kisskh/search', async (req, res) => {
     const { q, type = 0 } = req.query;
     if (!q) return res.status(400).json({ success: false, message: "සෙවිය යුතු පදය ඇතුළත් කරන්න." });
 
-    let browser;
     try {
         console.log(`🔍 Kisskh Search: "${q}", type: ${type}`);
         
-        browser = await puppeteer.launch({
-            executablePath: HEROKU_CHROME_PATH,
-            headless: true,
-            args: [
-                '--no-sandbox', 
-                '--disable-setuid-sandbox', 
-                '--disable-dev-shm-usage',
-                '--disable-blink-features=AutomationControlled',
-                '--disable-web-security'
-            ]
+        // Direct API call with cookies
+        const response = await axios.get(`${KISSKH_API}/DramaList/Search`, {
+            params: { q: q, type: type },
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Mobile Safari/537.36',
+                'Accept': 'application/json, text/plain, */*',
+                'Referer': 'https://kisskh.do/',
+                'Cookie': KISSKH_COOKIE
+            },
+            timeout: 30000
         });
 
-        const page = await browser.newPage();
-        await page.setViewport({ width: 1920, height: 1080 });
-        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+        let results = [];
+        const data = response.data;
         
-        // Important: Wait for network to be idle
-        const searchUrl = `${KISSKH_BASE}/search?keyword=${encodeURIComponent(q)}&type=${type}`;
-        console.log(`📄 Loading: ${searchUrl}`);
+        console.log(`📡 API Response Status: ${response.status}`);
         
-        // Go to page with more patience
-        await page.goto(searchUrl, { 
-            waitUntil: 'networkidle2', 
-            timeout: 90000 
-        });
-        
-        // Wait for Angular to render (longer wait)
-        console.log("⏳ Waiting for Angular to render...");
-        await delay(8000);
-        
-        // Wait for any content to appear
-        await page.waitForSelector('body', { timeout: 10000 });
-        
-        // Scroll multiple times to trigger lazy loading
-        console.log("📜 Scrolling to load content...");
-        for (let i = 0; i < 5; i++) {
-            await page.evaluate(() => {
-                window.scrollTo(0, document.body.scrollHeight);
-            });
-            await delay(1500);
-            await page.evaluate(() => {
-                window.scrollTo(0, 0);
-            });
-            await delay(1000);
+        // Parse response based on structure
+        if (data && data.data && Array.isArray(data.data)) {
+            results = data.data.map(item => ({
+                id: item.id,
+                title: item.name || item.title,
+                poster: item.poster || item.image,
+                year: item.year || '',
+                country: item.country || '',
+                type: item.type || '',
+                totalEpisodes: item.totalEpisodes || item.episodes || 0
+            }));
+        } else if (Array.isArray(data)) {
+            results = data.map(item => ({
+                id: item.id,
+                title: item.name || item.title,
+                poster: item.poster || item.image,
+                year: item.year || '',
+                country: item.country || ''
+            }));
+        } else if (data.results && Array.isArray(data.results)) {
+            results = data.results;
+        } else if (data.items && Array.isArray(data.items)) {
+            results = data.items;
         }
         
-        // Get the page HTML for debugging
-        const html = await page.content();
-        console.log(`📄 Page HTML length: ${html.length} characters`);
-        
-        // Check if page has content
-        const hasContent = await page.evaluate(() => {
-            return document.body.innerText.trim().length > 100;
-        });
-        console.log(`📝 Page has text content: ${hasContent}`);
-        
-        // Try multiple extraction methods
-        let results = [];
-        
-        // Method 1: Look for movie items
-        results = await page.evaluate(() => {
-            const items = [];
-            
-            // All possible selectors from the actual site
-            const selectors = [
-                '.movie-item',
-                '.item', 
-                '.mb',
-                '.film-item',
-                '.drama-item',
-                '[class*="movie"]',
-                '[class*="item"]',
-                'a[href*="/drama/"]',
-                'a[href*="/movie/"]'
-            ];
-            
-            for (const selector of selectors) {
-                const elements = document.querySelectorAll(selector);
-                if (elements.length > 0) {
-                    console.log(`Found ${elements.length} with selector: ${selector}`);
-                    
-                    elements.forEach(el => {
-                        // Get title
-                        const title = el.getAttribute('title') || 
-                                     el.querySelector('.title, .name, h3, .mbtit')?.innerText?.trim() || 
-                                     el.innerText?.trim().slice(0, 100);
-                        
-                        // Get link
-                        let link = el.href || el.querySelector('a')?.href || '';
-                        
-                        // Get image
-                        const img = el.querySelector('img');
-                        let image = img?.getAttribute('data-src') || img?.src || '';
-                        
-                        if (title && link && title.length > 2 && title.length < 200) {
-                            items.push({
-                                title: title,
-                                url: link.startsWith('http') ? link : `https://kisskh.do${link}`,
-                                image: image || null
-                            });
-                        }
-                    });
+        // If still no results, try to extract from the data object
+        if (results.length === 0 && data) {
+            console.log("⚠️ Trying alternative parsing...");
+            for (const key in data) {
+                if (Array.isArray(data[key]) && data[key].length > 0) {
+                    results = data[key];
                     break;
                 }
             }
-            
-            return items;
-        });
-        
-        // Method 2: If no results, parse HTML with cheerio
-        if (results.length === 0) {
-            console.log("⚠️ Method 1 failed, trying Cheerio HTML parsing...");
-            const $ = cheerio.load(html);
-            
-            $('a[href*="/drama/"], a[href*="/movie/"], a[href*="/anime/"]').each((i, el) => {
-                const href = $(el).attr('href');
-                if (href && (href.includes('/drama/') || href.includes('/movie/'))) {
-                    let title = $(el).find('img').attr('alt') || 
-                               $(el).find('.title').text().trim() || 
-                               $(el).text().trim();
-                    
-                    if (title && title.length > 2 && title.length < 200 && !title.includes('loading')) {
-                        const img = $(el).find('img').attr('data-src') || $(el).find('img').attr('src');
-                        
-                        results.push({
-                            title: title,
-                            url: href.startsWith('http') ? href : `${KISSKH_BASE}${href}`,
-                            image: (img && !img.includes('loading.svg')) ? img : null
-                        });
-                    }
-                }
-            });
         }
         
-        // Method 3: Try API endpoint directly
-        if (results.length === 0) {
-            console.log("⚠️ Method 2 failed, trying direct API call...");
-            try {
-                const apiUrl = `${KISSKH_BASE}/api/DramaList/Search?q=${encodeURIComponent(q)}&type=${type}`;
-                console.log(`📡 Trying API: ${apiUrl}`);
-                
-                const apiResponse = await axios.get(apiUrl, {
-                    headers: {
-                        'User-Agent': 'Mozilla/5.0',
-                        'Referer': KISSKH_BASE,
-                        'Cookie': KISSKH_COOKIE
-                    },
-                    timeout: 10000
-                });
-                
-                if (apiResponse.data && apiResponse.data.data) {
-                    results = apiResponse.data.data.map(item => ({
-                        title: item.name || item.title,
-                        url: `${KISSKH_BASE}/drama/${item.id}`,
-                        image: item.poster || null
-                    }));
-                }
-            } catch (apiError) {
-                console.log(`⚠️ API call failed: ${apiError.message}`);
-            }
-        }
-        
-        // Remove duplicates
-        const seen = new Set();
-        const uniqueResults = results.filter(item => {
-            if (seen.has(item.url)) return false;
-            seen.add(item.url);
-            return true;
-        });
-        
-        console.log(`✅ Final: Found ${uniqueResults.length} results for "${q}"`);
-        
-        // Log first result for debugging
-        if (uniqueResults.length > 0) {
-            console.log(`📌 Sample result: ${uniqueResults[0].title}`);
-        }
+        console.log(`✅ Found ${results.length} results for "${q}"`);
         
         res.json({
             success: true,
             creator: "ZANTA-MD",
             query: q,
             type: type,
-            count: uniqueResults.length,
-            results: uniqueResults.slice(0, 50)
+            count: results.length,
+            results: results.slice(0, 50)
         });
         
     } catch (error) {
         console.error("Kisskh Search Error:", error.message);
+        if (error.response) {
+            console.error("Status:", error.response.status);
+            console.error("Data:", error.response.data);
+        }
         res.status(500).json({ success: false, error: error.message });
-    } finally {
-        if (browser) await browser.close();
-    }
-});
-
-app.get('/api/kisskh/debug', async (req, res) => {
-    let browser;
-    try {
-        browser = await puppeteer.launch({
-            executablePath: HEROKU_CHROME_PATH,
-            headless: true,
-            args: ['--no-sandbox', '--disable-setuid-sandbox']
-        });
-
-        const page = await browser.newPage();
-        await page.goto('https://kisskh.do/search?keyword=new&type=0', { 
-            waitUntil: 'networkidle2', 
-            timeout: 60000 
-        });
-        
-        await delay(5000);
-        
-        const title = await page.title();
-        const bodyText = await page.evaluate(() => document.body.innerText.substring(0, 500));
-        
-        res.json({
-            success: true,
-            pageTitle: title,
-            bodyPreview: bodyText,
-            url: page.url()
-        });
-        
-    } catch (error) {
-        res.json({ success: false, error: error.message });
-    } finally {
-        if (browser) await browser.close();
-    }
-});
-
-// --- Get Drama Details (Episodes) ---
-app.get('/api/kisskh/detail', async (req, res) => {
-    const { url } = req.query;
-    if (!url) return res.status(400).json({ success: false, message: "Drama URL required" });
-
-    let browser;
-    try {
-        browser = await puppeteer.launch({
-            executablePath: HEROKU_CHROME_PATH,
-            headless: true,
-            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
-        });
-
-        const page = await browser.newPage();
-        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
-        await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 });
-        
-        await page.waitForTimeout(3000);
-        
-        const data = await page.evaluate(() => {
-            // Get title
-            const title = document.querySelector('h1, .title, .drama-title')?.innerText?.trim() || '';
-            
-            // Get poster
-            const poster = document.querySelector('.poster img, .cover img, img[class*="poster"]')?.src || '';
-            
-            // Get description
-            const description = document.querySelector('.description, .synopsis, .summary')?.innerText?.trim() || '';
-            
-            // Get episodes
-            const episodes = [];
-            const episodeLinks = document.querySelectorAll('.episode-list a, .episodes a, .ep-list a, .ep-item a');
-            episodeLinks.forEach((el, i) => {
-                episodes.push({
-                    episode: i + 1,
-                    url: el.href,
-                    title: el.innerText?.trim() || `Episode ${i + 1}`
-                });
-            });
-            
-            return { title, poster, description, episodes };
-        });
-        
-        res.json({ success: true, creator: "ZANTA-MD", ...data });
-        
-    } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
-    } finally {
-        if (browser) await browser.close();
-    }
-});
-
-// --- Get Episode Download Links ---
-app.get('/api/kisskh/episode', async (req, res) => {
-    const { url } = req.query;
-    if (!url) return res.status(400).json({ success: false, message: "Episode URL required" });
-
-    let browser;
-    try {
-        browser = await puppeteer.launch({
-            executablePath: HEROKU_CHROME_PATH,
-            headless: true,
-            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
-        });
-
-        const page = await browser.newPage();
-        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
-        
-        // Block ads
-        await page.setRequestInterception(true);
-        page.on('request', (request) => {
-            const url = request.url();
-            if (url.includes('googleads') || url.includes('doubleclick') || url.includes('popads')) {
-                request.abort();
-            } else {
-                request.continue();
-            }
-        });
-        
-        await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 });
-        await page.waitForTimeout(5000);
-        
-        const videoSources = await page.evaluate(() => {
-            const sources = [];
-            
-            // Check iframes
-            const iframes = document.querySelectorAll('iframe');
-            iframes.forEach(iframe => {
-                const src = iframe.src;
-                if (src && src.startsWith('http')) {
-                    sources.push({ type: 'iframe', url: src });
-                }
-            });
-            
-            // Check video elements
-            const videos = document.querySelectorAll('video source, video');
-            videos.forEach(video => {
-                const src = video.src || video.getAttribute('src');
-                if (src && src.includes('http')) {
-                    sources.push({ type: 'video', url: src });
-                }
-            });
-            
-            // Check server buttons
-            const serverBtns = document.querySelectorAll('.server-btn, .download-btn, .watch-btn');
-            serverBtns.forEach(btn => {
-                const dataLink = btn.getAttribute('data-link') || btn.getAttribute('data-url');
-                if (dataLink && dataLink.startsWith('http')) {
-                    sources.push({ type: 'server', url: dataLink, name: btn.innerText?.trim() });
-                }
-            });
-            
-            return sources;
-        });
-        
-        res.json({
-            success: true,
-            creator: "ZANTA-MD",
-            episodeUrl: url,
-            sources: videoSources,
-            count: videoSources.length
-        });
-        
-    } catch (error) {
-        console.error("Episode Error:", error.message);
-        res.status(500).json({ success: false, error: error.message });
-    } finally {
-        if (browser) await browser.close();
     }
 });
 
