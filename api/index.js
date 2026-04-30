@@ -52,144 +52,158 @@ app.get('/api/kisskh/search', async (req, res) => {
                 '--disable-setuid-sandbox', 
                 '--disable-dev-shm-usage',
                 '--disable-blink-features=AutomationControlled',
-                '--disable-web-security',
-                '--disable-features=IsolateOrigins,site-per-process'
+                '--disable-web-security'
             ]
         });
 
         const page = await browser.newPage();
+        await page.setViewport({ width: 1920, height: 1080 });
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
         
-        // Set viewport
-        await page.setViewport({ width: 1280, height: 800 });
-        
-        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
-        
-        // Add extra headers to avoid detection
-        await page.setExtraHTTPHeaders({
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Referer': KISSKH_BASE
-        });
-
-        // Navigate to search page
+        // Important: Wait for network to be idle
         const searchUrl = `${KISSKH_BASE}/search?keyword=${encodeURIComponent(q)}&type=${type}`;
         console.log(`📄 Loading: ${searchUrl}`);
         
-        await page.goto(searchUrl, { waitUntil: 'networkidle2', timeout: 60000 });
-        
-        // ✅ FIX: Use delay() instead of waitForTimeout
-        await delay(5000);
-        
-        // Scroll to load lazy content
-        await page.evaluate(() => {
-            window.scrollTo(0, document.body.scrollHeight);
+        // Go to page with more patience
+        await page.goto(searchUrl, { 
+            waitUntil: 'networkidle2', 
+            timeout: 90000 
         });
-        await delay(3000);
         
-        // Scroll back to top
-        await page.evaluate(() => {
-            window.scrollTo(0, 0);
+        // Wait for Angular to render (longer wait)
+        console.log("⏳ Waiting for Angular to render...");
+        await delay(8000);
+        
+        // Wait for any content to appear
+        await page.waitForSelector('body', { timeout: 10000 });
+        
+        // Scroll multiple times to trigger lazy loading
+        console.log("📜 Scrolling to load content...");
+        for (let i = 0; i < 5; i++) {
+            await page.evaluate(() => {
+                window.scrollTo(0, document.body.scrollHeight);
+            });
+            await delay(1500);
+            await page.evaluate(() => {
+                window.scrollTo(0, 0);
+            });
+            await delay(1000);
+        }
+        
+        // Get the page HTML for debugging
+        const html = await page.content();
+        console.log(`📄 Page HTML length: ${html.length} characters`);
+        
+        // Check if page has content
+        const hasContent = await page.evaluate(() => {
+            return document.body.innerText.trim().length > 100;
         });
-        await delay(1000);
+        console.log(`📝 Page has text content: ${hasContent}`);
         
-        // Extract results - using multiple selectors
-        const results = await page.evaluate(() => {
+        // Try multiple extraction methods
+        let results = [];
+        
+        // Method 1: Look for movie items
+        results = await page.evaluate(() => {
             const items = [];
             
-            // Try all possible selectors
+            // All possible selectors from the actual site
             const selectors = [
-                '.movie-list .movie-item',
-                '.items .item', 
                 '.movie-item',
-                'app-main-card',
+                '.item', 
                 '.mb',
-                '.item'
+                '.film-item',
+                '.drama-item',
+                '[class*="movie"]',
+                '[class*="item"]',
+                'a[href*="/drama/"]',
+                'a[href*="/movie/"]'
             ];
             
-            let elements = [];
             for (const selector of selectors) {
-                elements = document.querySelectorAll(selector);
+                const elements = document.querySelectorAll(selector);
                 if (elements.length > 0) {
-                    console.log(`Found ${elements.length} items with selector: ${selector}`);
+                    console.log(`Found ${elements.length} with selector: ${selector}`);
+                    
+                    elements.forEach(el => {
+                        // Get title
+                        const title = el.getAttribute('title') || 
+                                     el.querySelector('.title, .name, h3, .mbtit')?.innerText?.trim() || 
+                                     el.innerText?.trim().slice(0, 100);
+                        
+                        // Get link
+                        let link = el.href || el.querySelector('a')?.href || '';
+                        
+                        // Get image
+                        const img = el.querySelector('img');
+                        let image = img?.getAttribute('data-src') || img?.src || '';
+                        
+                        if (title && link && title.length > 2 && title.length < 200) {
+                            items.push({
+                                title: title,
+                                url: link.startsWith('http') ? link : `https://kisskh.do${link}`,
+                                image: image || null
+                            });
+                        }
+                    });
                     break;
                 }
             }
             
-            elements.forEach(el => {
-                // Extract image
-                const img = el.querySelector('img');
-                let image = '';
-                if (img) {
-                    image = img.getAttribute('data-src') || img.getAttribute('src') || '';
-                    if (image && (image.startsWith('data:') || image.includes('loading.svg'))) {
-                        image = '';
-                    }
-                }
-                
-                // Extract title - try multiple possibilities
-                let title = '';
-                const titleSelectors = ['.title', '.mbtit a', '.drama-title', 'h3', '.name', '.movie-title'];
-                for (const sel of titleSelectors) {
-                    const titleEl = el.querySelector(sel);
-                    if (titleEl && titleEl.innerText.trim()) {
-                        title = titleEl.innerText.trim();
-                        break;
-                    }
-                }
-                
-                // Extract link
-                const linkEl = el.querySelector('a');
-                let link = linkEl ? linkEl.href : '';
-                
-                // Extract episode info
-                let episode = '';
-                const epSelectors = ['.ep', '.duration', '.episode', '.total-ep', '.duration-span'];
-                for (const sel of epSelectors) {
-                    const epEl = el.querySelector(sel);
-                    if (epEl && epEl.innerText.trim()) {
-                        episode = epEl.innerText.trim();
-                        break;
-                    }
-                }
-                
-                if (title && link) {
-                    items.push({
-                        title: title,
-                        url: link.startsWith('http') ? link : `${window.location.origin}${link}`,
-                        image: image || null,
-                        episode: episode,
-                        type: ''
-                    });
-                }
-            });
-            
             return items;
         });
         
-        // If no results, try to get from page content
+        // Method 2: If no results, parse HTML with cheerio
         if (results.length === 0) {
-            console.log("⚠️ No results with selectors, trying HTML parsing...");
-            
-            const html = await page.content();
+            console.log("⚠️ Method 1 failed, trying Cheerio HTML parsing...");
             const $ = cheerio.load(html);
             
-            // Look for links that go to drama pages
             $('a[href*="/drama/"], a[href*="/movie/"], a[href*="/anime/"]').each((i, el) => {
                 const href = $(el).attr('href');
-                if (href && (href.includes('/drama/') || href.includes('/movie/') || href.includes('/anime/'))) {
-                    const title = $(el).find('img').attr('alt') || $(el).find('.title').text().trim() || $(el).text().trim();
-                    const img = $(el).find('img').attr('data-src') || $(el).find('img').attr('src');
+                if (href && (href.includes('/drama/') || href.includes('/movie/'))) {
+                    let title = $(el).find('img').attr('alt') || 
+                               $(el).find('.title').text().trim() || 
+                               $(el).text().trim();
                     
-                    if (title && title.length > 2 && title.length < 200) {
+                    if (title && title.length > 2 && title.length < 200 && !title.includes('loading')) {
+                        const img = $(el).find('img').attr('data-src') || $(el).find('img').attr('src');
+                        
                         results.push({
                             title: title,
                             url: href.startsWith('http') ? href : `${KISSKH_BASE}${href}`,
-                            image: (img && !img.includes('loading.svg')) ? img : null,
-                            episode: '',
-                            type: ''
+                            image: (img && !img.includes('loading.svg')) ? img : null
                         });
                     }
                 }
             });
+        }
+        
+        // Method 3: Try API endpoint directly
+        if (results.length === 0) {
+            console.log("⚠️ Method 2 failed, trying direct API call...");
+            try {
+                const apiUrl = `${KISSKH_BASE}/api/DramaList/Search?q=${encodeURIComponent(q)}&type=${type}`;
+                console.log(`📡 Trying API: ${apiUrl}`);
+                
+                const apiResponse = await axios.get(apiUrl, {
+                    headers: {
+                        'User-Agent': 'Mozilla/5.0',
+                        'Referer': KISSKH_BASE,
+                        'Cookie': KISSKH_COOKIE
+                    },
+                    timeout: 10000
+                });
+                
+                if (apiResponse.data && apiResponse.data.data) {
+                    results = apiResponse.data.data.map(item => ({
+                        title: item.name || item.title,
+                        url: `${KISSKH_BASE}/drama/${item.id}`,
+                        image: item.poster || null
+                    }));
+                }
+            } catch (apiError) {
+                console.log(`⚠️ API call failed: ${apiError.message}`);
+            }
         }
         
         // Remove duplicates
@@ -200,7 +214,12 @@ app.get('/api/kisskh/search', async (req, res) => {
             return true;
         });
         
-        console.log(`✅ Found ${uniqueResults.length} results for "${q}"`);
+        console.log(`✅ Final: Found ${uniqueResults.length} results for "${q}"`);
+        
+        // Log first result for debugging
+        if (uniqueResults.length > 0) {
+            console.log(`📌 Sample result: ${uniqueResults[0].title}`);
+        }
         
         res.json({
             success: true,
@@ -214,6 +233,40 @@ app.get('/api/kisskh/search', async (req, res) => {
     } catch (error) {
         console.error("Kisskh Search Error:", error.message);
         res.status(500).json({ success: false, error: error.message });
+    } finally {
+        if (browser) await browser.close();
+    }
+});
+
+app.get('/api/kisskh/debug', async (req, res) => {
+    let browser;
+    try {
+        browser = await puppeteer.launch({
+            executablePath: HEROKU_CHROME_PATH,
+            headless: true,
+            args: ['--no-sandbox', '--disable-setuid-sandbox']
+        });
+
+        const page = await browser.newPage();
+        await page.goto('https://kisskh.do/search?keyword=new&type=0', { 
+            waitUntil: 'networkidle2', 
+            timeout: 60000 
+        });
+        
+        await delay(5000);
+        
+        const title = await page.title();
+        const bodyText = await page.evaluate(() => document.body.innerText.substring(0, 500));
+        
+        res.json({
+            success: true,
+            pageTitle: title,
+            bodyPreview: bodyText,
+            url: page.url()
+        });
+        
+    } catch (error) {
+        res.json({ success: false, error: error.message });
     } finally {
         if (browser) await browser.close();
     }
