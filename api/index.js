@@ -58,59 +58,93 @@ app.get('/api/9jarocks/search', async (req, res) => {
         await page.setViewport({ width: 1280, height: 800 });
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
 
-        const searchUrl = `${JAROCKS_BASE}/find/?q=${encodeURIComponent(q)}`;
+        // ✅ Correct URL as you mentioned
+        const searchUrl = `${JAROCKS_BASE}/findx?search=${encodeURIComponent(q)}`;
         console.log(`📄 Loading: ${searchUrl}`);
         
-        await page.goto(searchUrl, { waitUntil: 'networkidle2', timeout: 60000 });
+        await page.goto(searchUrl, { 
+            waitUntil: 'networkidle2', 
+            timeout: 60000 
+        });
         
-        // Wait for content
-        await delay(5000);
+        // Wait for Cloudflare to pass
+        await delay(8000);
         
-        // Extract results
+        // Check if Cloudflare challenge is present
+        const pageTitle = await page.title();
+        if (pageTitle.includes('Just a moment')) {
+            console.log("⚠️ Cloudflare challenge detected, waiting...");
+            await delay(15000);
+        }
+        
+        // Extract results from the page
         const results = await page.evaluate(() => {
             const items = [];
             
-            // Look for post items
+            // Look for post items using the correct selectors from your HTML
             const selectors = [
                 '.posts-items li',
                 '.post-item',
                 '.mag-box .post-item',
-                'article',
-                '.post'
+                '.tie-standard'
             ];
             
             let elements = [];
             for (const selector of selectors) {
                 elements = document.querySelectorAll(selector);
-                if (elements.length > 0) break;
+                if (elements.length > 0) {
+                    console.log(`Found ${elements.length} items with selector: ${selector}`);
+                    break;
+                }
             }
             
             elements.forEach(el => {
                 // Get title
-                const titleEl = el.querySelector('.post-title a, h2 a, .entry-title a, h2');
+                const titleEl = el.querySelector('.post-title a, h2 a');
                 let title = titleEl ? titleEl.innerText.trim() : '';
                 
                 // Get link
-                const linkEl = el.querySelector('a');
-                let link = linkEl ? linkEl.href : '';
+                let link = '';
+                if (titleEl) {
+                    link = titleEl.href;
+                } else {
+                    const linkEl = el.querySelector('a');
+                    link = linkEl ? linkEl.href : '';
+                }
                 
                 // Get image
                 const img = el.querySelector('img');
-                let image = img ? (img.src || img.getAttribute('data-src')) : '';
+                let image = '';
+                if (img) {
+                    image = img.src || img.getAttribute('data-src') || '';
+                    if (image && image.startsWith('data:')) {
+                        image = img.getAttribute('data-src') || '';
+                    }
+                }
                 
                 // Get date
                 const dateEl = el.querySelector('.date, .post-date, time');
                 let date = dateEl ? dateEl.innerText.trim() : '';
                 
+                // Get category
+                const catEl = el.querySelector('.post-cat');
+                let category = catEl ? catEl.innerText.trim() : '';
+                
                 if (title && link) {
-                    items.push({ title, url: link, image, date });
+                    items.push({
+                        title: title,
+                        url: link,
+                        image: image || null,
+                        date: date || null,
+                        category: category || null
+                    });
                 }
             });
             
             return items;
         });
         
-        console.log(`✅ Found ${results.length} results`);
+        console.log(`✅ Found ${results.length} results for "${q}"`);
         
         res.json({
             success: true,
@@ -127,7 +161,6 @@ app.get('/api/9jarocks/search', async (req, res) => {
         if (browser) await browser.close();
     }
 });
-
 // --- Get Details / Download Links ---
 app.get('/api/9jarocks/details', async (req, res) => {
     const { url } = req.query;
