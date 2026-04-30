@@ -39,90 +39,92 @@ app.get('/api/9jarocks/search', async (req, res) => {
     const { q } = req.query;
     if (!q) return res.status(400).json({ success: false, message: "සෙවිය යුතු පදය ඇතුළත් කරන්න." });
 
+    let browser;
     try {
         console.log(`🔍 9jarocks Search: "${q}"`);
         
-        // Search URL format
+        browser = await puppeteer.launch({
+            executablePath: HEROKU_CHROME_PATH,
+            headless: true,
+            args: [
+                '--no-sandbox', 
+                '--disable-setuid-sandbox', 
+                '--disable-dev-shm-usage',
+                '--disable-blink-features=AutomationControlled'
+            ]
+        });
+
+        const page = await browser.newPage();
+        await page.setViewport({ width: 1280, height: 800 });
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
+
         const searchUrl = `${JAROCKS_BASE}/find/?q=${encodeURIComponent(q)}`;
         console.log(`📄 Loading: ${searchUrl}`);
         
-        const response = await axios.get(searchUrl, {
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.5'
-            }
-        });
+        await page.goto(searchUrl, { waitUntil: 'networkidle2', timeout: 60000 });
         
-        const $ = cheerio.load(response.data);
-        let results = [];
+        // Wait for content
+        await delay(5000);
         
-        // Look for search results - from the screenshot, results are in .posts-items or .post-item
-        $('.posts-items li.post-item, .post-item, .mag-box .post-item').each((i, el) => {
-            const titleElement = $(el).find('.post-title a, h2 a, .entry-title a');
-            let title = titleElement.text().trim();
+        // Extract results
+        const results = await page.evaluate(() => {
+            const items = [];
             
-            // If no title found, try the image alt
-            if (!title) {
-                title = $(el).find('img').attr('alt') || '';
+            // Look for post items
+            const selectors = [
+                '.posts-items li',
+                '.post-item',
+                '.mag-box .post-item',
+                'article',
+                '.post'
+            ];
+            
+            let elements = [];
+            for (const selector of selectors) {
+                elements = document.querySelectorAll(selector);
+                if (elements.length > 0) break;
             }
             
-            const link = titleElement.attr('href') || $(el).find('a').first().attr('href');
-            const image = $(el).find('img').attr('src') || $(el).find('img').attr('data-src');
-            const excerpt = $(el).find('.entry-content p, .post-excerpt').text().trim();
-            const date = $(el).find('.date, .post-date, .published').text().trim();
-            
-            if (title && link) {
-                results.push({
-                    title: title,
-                    url: link,
-                    image: image || null,
-                    excerpt: excerpt || null,
-                    date: date || null
-                });
-            }
-        });
-        
-        // Alternative selector - for the specific result shown
-        if (results.length === 0) {
-            $('a[href*="/videodownload/"]').each((i, el) => {
-                const title = $(el).find('img').attr('alt') || $(el).text().trim();
-                const link = $(el).attr('href');
-                const image = $(el).find('img').attr('src') || $(el).find('img').attr('data-src');
+            elements.forEach(el => {
+                // Get title
+                const titleEl = el.querySelector('.post-title a, h2 a, .entry-title a, h2');
+                let title = titleEl ? titleEl.innerText.trim() : '';
                 
-                if (title && link && title.length > 5) {
-                    results.push({
-                        title: title,
-                        url: link,
-                        image: image || null,
-                        excerpt: null,
-                        date: null
-                    });
+                // Get link
+                const linkEl = el.querySelector('a');
+                let link = linkEl ? linkEl.href : '';
+                
+                // Get image
+                const img = el.querySelector('img');
+                let image = img ? (img.src || img.getAttribute('data-src')) : '';
+                
+                // Get date
+                const dateEl = el.querySelector('.date, .post-date, time');
+                let date = dateEl ? dateEl.innerText.trim() : '';
+                
+                if (title && link) {
+                    items.push({ title, url: link, image, date });
                 }
             });
-        }
-        
-        // Remove duplicates
-        const seen = new Set();
-        const uniqueResults = results.filter(item => {
-            if (seen.has(item.url)) return false;
-            seen.add(item.url);
-            return true;
+            
+            return items;
         });
         
-        console.log(`✅ Found ${uniqueResults.length} results for "${q}"`);
+        console.log(`✅ Found ${results.length} results`);
         
         res.json({
             success: true,
             creator: "ZANTA-MD",
             query: q,
-            count: uniqueResults.length,
-            results: uniqueResults.slice(0, 30)
+            count: results.length,
+            results: results.slice(0, 30)
         });
         
     } catch (error) {
         console.error("9jarocks Search Error:", error.message);
         res.status(500).json({ success: false, error: error.message });
+    } finally {
+        if (browser) await browser.close();
     }
 });
 
@@ -131,128 +133,44 @@ app.get('/api/9jarocks/details', async (req, res) => {
     const { url } = req.query;
     if (!url) return res.status(400).json({ success: false, message: "URL required" });
 
+    let browser;
     try {
-        console.log(`📄 Getting details from: ${url}`);
-        
-        const response = await axios.get(url, {
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
-            }
+        browser = await puppeteer.launch({
+            executablePath: HEROKU_CHROME_PATH,
+            headless: true,
+            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
         });
+
+        const page = await browser.newPage();
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
+        await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 });
         
-        const $ = cheerio.load(response.data);
+        await delay(4000);
         
-        // Get title
-        const title = $('h1.entry-title, .post-title, h1').first().text().trim();
-        
-        // Get description/content
-        const description = $('.entry-content, .post-content, .single-post-content').first().text().trim().substring(0, 500);
-        
-        // Get image
-        const image = $('.entry-content img, .post-thumbnail img').first().attr('src') || 
-                     $('img.wp-post-image').attr('src') || null;
-        
-        // Extract download links
-        const downloadLinks = [];
-        
-        // Look for download buttons/links
-        $('a[href*="download"], a[href*="mega"], a[href*="drive"], a[href*="mediafire"], a[href*="zippyshare"]').each((i, el) => {
-            const link = $(el).attr('href');
-            const text = $(el).text().trim();
-            if (link && link.startsWith('http')) {
+        const data = await page.evaluate(() => {
+            const title = document.querySelector('h1.entry-title, h1')?.innerText?.trim() || '';
+            const content = document.querySelector('.entry-content, .post-content')?.innerText?.trim() || '';
+            const image = document.querySelector('.entry-content img, .post-thumbnail img')?.src || '';
+            
+            // Extract download links
+            const downloadLinks = [];
+            const links = document.querySelectorAll('a[href*="download"], a[href*="mega"], a[href*="mediafire"]');
+            links.forEach(link => {
                 downloadLinks.push({
-                    name: text || `Download Link ${i + 1}`,
-                    url: link
+                    name: link.innerText?.trim() || 'Download Link',
+                    url: link.href
                 });
-            }
+            });
+            
+            return { title, description: content.substring(0, 500), image, downloadLinks };
         });
         
-        // Also look for direct video links
-        $('video source, video').each((i, el) => {
-            const src = $(el).attr('src') || $(el).attr('data-src');
-            if (src && src.startsWith('http')) {
-                downloadLinks.push({
-                    name: `Video Source ${i + 1}`,
-                    url: src
-                });
-            }
-        });
-        
-        // Check for iframe embeds
-        $('iframe').each((i, el) => {
-            const src = $(el).attr('src');
-            if (src && (src.includes('youtube') || src.includes('drive') || src.includes('mega'))) {
-                downloadLinks.push({
-                    name: `Embed ${i + 1}`,
-                    url: src
-                });
-            }
-        });
-        
-        res.json({
-            success: true,
-            creator: "ZANTA-MD",
-            title: title,
-            description: description,
-            image: image,
-            downloadLinks: downloadLinks,
-            count: downloadLinks.length
-        });
+        res.json({ success: true, creator: "ZANTA-MD", ...data });
         
     } catch (error) {
-        console.error("9jarocks Details Error:", error.message);
         res.status(500).json({ success: false, error: error.message });
-    }
-});
-
-// --- Get Video Info (for streaming) ---
-app.get('/api/9jarocks/video', async (req, res) => {
-    const { url } = req.query;
-    if (!url) return res.status(400).json({ success: false, message: "Video URL required" });
-
-    try {
-        const response = await axios.get(url, {
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-            }
-        });
-        
-        const $ = cheerio.load(response.data);
-        
-        // Extract video sources
-        const videoSources = [];
-        
-        $('video source, video').each((i, el) => {
-            const src = $(el).attr('src') || $(el).attr('data-src');
-            const type = $(el).attr('type') || 'video/mp4';
-            if (src) {
-                videoSources.push({
-                    quality: $(el).attr('data-quality') || 'auto',
-                    url: src,
-                    type: type
-                });
-            }
-        });
-        
-        // Check for download buttons
-        const downloadUrls = [];
-        $('a[href*="download"]').each((i, el) => {
-            const href = $(el).attr('href');
-            if (href && href.includes('.mp4')) {
-                downloadUrls.push(href);
-            }
-        });
-        
-        res.json({
-            success: true,
-            creator: "ZANTA-MD",
-            videoSources: videoSources,
-            downloadUrls: downloadUrls
-        });
-        
-    } catch (error) {
-        console.error("9jarocks Video Error:", error.message);
-        res.status(500).json({ success: false, error: error.message });
+    } finally {
+        if (browser) await browser.close();
     }
 });
 
