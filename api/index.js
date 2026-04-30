@@ -24,11 +24,298 @@ const HEADERS = {
     'Upgrade-Insecure-Requests': '1'
 };
 
+const KISSKH_BASE = "https://kisskh.do";
 const BASE_URL = "https://fitgirl-repacks.site";
 const ANIME_BASE = "https://animeheaven.me";
 const CARTOONS_BASE = "https://cartoons.lk";
 const HEROKU_CHROME_PATH = '/app/.chrome-for-testing/chrome-linux64/chrome';
 
+
+app.get('/api/kisskh/search', async (req, res) => {
+    const { q, type = 0 } = req.query;
+    if (!q) return res.status(400).json({ success: false, message: "සෙවිය යුතු පදය ඇතුළත් කරන්න." });
+
+    let browser;
+    try {
+        console.log(`🔍 Kisskh Search: "${q}", type: ${type}`);
+        
+        browser = await puppeteer.launch({
+            executablePath: HEROKU_CHROME_PATH,
+            headless: true,
+            args: [
+                '--no-sandbox', 
+                '--disable-setuid-sandbox', 
+                '--disable-dev-shm-usage',
+                '--disable-blink-features=AutomationControlled'
+            ]
+        });
+
+        const page = await browser.newPage();
+        
+        // Set viewport
+        await page.setViewport({ width: 1280, height: 800 });
+        
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
+        
+        // Add extra headers to avoid detection
+        await page.setExtraHTTPHeaders({
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Referer': KISSKH_BASE
+        });
+
+        // Navigate to search page
+        const searchUrl = `${KISSKH_BASE}/search?keyword=${encodeURIComponent(q)}&type=${type}`;
+        console.log(`📄 Loading: ${searchUrl}`);
+        
+        await page.goto(searchUrl, { waitUntil: 'networkidle2', timeout: 60000 });
+        
+        // Wait for results to load (Angular needs time)
+        await page.waitForTimeout(3000);
+        
+        // Scroll to load lazy content
+        await page.evaluate(() => {
+            window.scrollTo(0, document.body.scrollHeight);
+        });
+        await page.waitForTimeout(2000);
+        
+        // Extract results - using correct selectors from the HTML
+        const results = await page.evaluate(() => {
+            const items = [];
+            
+            // From the HTML: .movie-list .movie-item OR .items .item
+            const selectors = [
+                '.movie-list .movie-item',
+                '.items .item',
+                '.movie-item',
+                'app-main-card',
+                '.mb'
+            ];
+            
+            let elements = [];
+            for (const selector of selectors) {
+                elements = document.querySelectorAll(selector);
+                if (elements.length > 0) break;
+            }
+            
+            elements.forEach(el => {
+                // Extract image
+                const img = el.querySelector('img');
+                let image = '';
+                if (img) {
+                    image = img.getAttribute('data-src') || img.getAttribute('src') || '';
+                    if (image.startsWith('data:')) image = '';
+                }
+                
+                // Extract title
+                const titleEl = el.querySelector('.title, .mbtit a, .drama-title, h3, .name');
+                let title = titleEl ? titleEl.innerText.trim() : '';
+                
+                // Extract link
+                const linkEl = el.querySelector('a');
+                let link = linkEl ? linkEl.href : '';
+                
+                // Extract episode info
+                const epEl = el.querySelector('.ep, .duration, .episode, .total-ep');
+                let episode = epEl ? epEl.innerText.trim() : '';
+                
+                if (title && link) {
+                    items.push({
+                        title: title,
+                        url: link.startsWith('http') ? link : `${KISSKH_BASE}${link}`,
+                        image: image || null,
+                        episode: episode,
+                        type: ''
+                    });
+                }
+            });
+            
+            return items;
+        });
+        
+        // If still no results, try getting from the actual HTML structure we saw
+        if (results.length === 0) {
+            console.log("⚠️ No results with selectors, trying HTML parsing...");
+            
+            const html = await page.content();
+            const $ = cheerio.load(html);
+            
+            // From the HTML: .movie-item or .item
+            $('.movie-item, .item, app-main-card').each((i, el) => {
+                const title = $(el).find('.title, .mbtit a, h3').text().trim();
+                let link = $(el).find('a').attr('href');
+                const img = $(el).find('img').attr('data-src') || $(el).find('img').attr('src');
+                
+                if (title && link) {
+                    results.push({
+                        title: title,
+                        url: link.startsWith('http') ? link : `${KISSKH_BASE}${link}`,
+                        image: img || null,
+                        episode: '',
+                        type: ''
+                    });
+                }
+            });
+        }
+        
+        // Filter out duplicates
+        const uniqueResults = [];
+        const seenUrls = new Set();
+        for (const item of results) {
+            if (!seenUrls.has(item.url)) {
+                seenUrls.add(item.url);
+                uniqueResults.push(item);
+            }
+        }
+        
+        console.log(`✅ Found ${uniqueResults.length} results for "${q}"`);
+        
+        res.json({
+            success: true,
+            creator: "ZANTA-MD",
+            query: q,
+            type: type,
+            count: uniqueResults.length,
+            results: uniqueResults.slice(0, 50)
+        });
+        
+    } catch (error) {
+        console.error("Kisskh Search Error:", error.message);
+        res.status(500).json({ success: false, error: error.message });
+    } finally {
+        if (browser) await browser.close();
+    }
+});
+
+// --- Get Drama Details (Episodes) ---
+app.get('/api/kisskh/detail', async (req, res) => {
+    const { url } = req.query;
+    if (!url) return res.status(400).json({ success: false, message: "Drama URL required" });
+
+    let browser;
+    try {
+        browser = await puppeteer.launch({
+            executablePath: HEROKU_CHROME_PATH,
+            headless: true,
+            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+        });
+
+        const page = await browser.newPage();
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
+        await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 });
+        
+        await page.waitForTimeout(3000);
+        
+        const data = await page.evaluate(() => {
+            // Get title
+            const title = document.querySelector('h1, .title, .drama-title')?.innerText?.trim() || '';
+            
+            // Get poster
+            const poster = document.querySelector('.poster img, .cover img, img[class*="poster"]')?.src || '';
+            
+            // Get description
+            const description = document.querySelector('.description, .synopsis, .summary')?.innerText?.trim() || '';
+            
+            // Get episodes
+            const episodes = [];
+            const episodeLinks = document.querySelectorAll('.episode-list a, .episodes a, .ep-list a, .ep-item a');
+            episodeLinks.forEach((el, i) => {
+                episodes.push({
+                    episode: i + 1,
+                    url: el.href,
+                    title: el.innerText?.trim() || `Episode ${i + 1}`
+                });
+            });
+            
+            return { title, poster, description, episodes };
+        });
+        
+        res.json({ success: true, creator: "ZANTA-MD", ...data });
+        
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    } finally {
+        if (browser) await browser.close();
+    }
+});
+
+// --- Get Episode Download Links ---
+app.get('/api/kisskh/episode', async (req, res) => {
+    const { url } = req.query;
+    if (!url) return res.status(400).json({ success: false, message: "Episode URL required" });
+
+    let browser;
+    try {
+        browser = await puppeteer.launch({
+            executablePath: HEROKU_CHROME_PATH,
+            headless: true,
+            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+        });
+
+        const page = await browser.newPage();
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
+        
+        // Block ads
+        await page.setRequestInterception(true);
+        page.on('request', (request) => {
+            const url = request.url();
+            if (url.includes('googleads') || url.includes('doubleclick') || url.includes('popads')) {
+                request.abort();
+            } else {
+                request.continue();
+            }
+        });
+        
+        await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 });
+        await page.waitForTimeout(5000);
+        
+        const videoSources = await page.evaluate(() => {
+            const sources = [];
+            
+            // Check iframes
+            const iframes = document.querySelectorAll('iframe');
+            iframes.forEach(iframe => {
+                const src = iframe.src;
+                if (src && src.startsWith('http')) {
+                    sources.push({ type: 'iframe', url: src });
+                }
+            });
+            
+            // Check video elements
+            const videos = document.querySelectorAll('video source, video');
+            videos.forEach(video => {
+                const src = video.src || video.getAttribute('src');
+                if (src && src.includes('http')) {
+                    sources.push({ type: 'video', url: src });
+                }
+            });
+            
+            // Check server buttons
+            const serverBtns = document.querySelectorAll('.server-btn, .download-btn, .watch-btn');
+            serverBtns.forEach(btn => {
+                const dataLink = btn.getAttribute('data-link') || btn.getAttribute('data-url');
+                if (dataLink && dataLink.startsWith('http')) {
+                    sources.push({ type: 'server', url: dataLink, name: btn.innerText?.trim() });
+                }
+            });
+            
+            return sources;
+        });
+        
+        res.json({
+            success: true,
+            creator: "ZANTA-MD",
+            episodeUrl: url,
+            sources: videoSources,
+            count: videoSources.length
+        });
+        
+    } catch (error) {
+        console.error("Episode Error:", error.message);
+        res.status(500).json({ success: false, error: error.message });
+    } finally {
+        if (browser) await browser.close();
+    }
+});
 
 //-------CINESUBZ---------
 async function getCinesubzAxiosHTML(targetUrl) {
