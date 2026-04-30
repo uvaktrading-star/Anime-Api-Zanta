@@ -45,63 +45,135 @@ app.get('/api/kisskh/search', async (req, res) => {
     const { q, type = 0 } = req.query;
     if (!q) return res.status(400).json({ success: false, message: "සෙවිය යුතු පදය ඇතුළත් කරන්න." });
 
+    let browser;
     try {
         console.log(`🔍 Kisskh Search: "${q}", type: ${type}`);
         
-        // Direct API call with cookies
-        const response = await axios.get(`${KISSKH_API}/DramaList/Search`, {
-            params: { q: q, type: type },
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Mobile Safari/537.36',
-                'Accept': 'application/json, text/plain, */*',
-                'Referer': 'https://kisskh.do/',
-                'Cookie': KISSKH_COOKIE
-            },
-            timeout: 30000
+        browser = await puppeteer.launch({
+            executablePath: HEROKU_CHROME_PATH,
+            headless: true,
+            args: [
+                '--no-sandbox', 
+                '--disable-setuid-sandbox', 
+                '--disable-dev-shm-usage',
+                '--disable-blink-features=AutomationControlled',
+                '--window-size=1920,1080'
+            ]
         });
 
-        let results = [];
-        const data = response.data;
+        const page = await browser.newPage();
+        await page.setViewport({ width: 1920, height: 1080 });
         
-        console.log(`📡 API Response Status: ${response.status}`);
+        // Set realistic user agent
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
         
-        // Parse response based on structure
-        if (data && data.data && Array.isArray(data.data)) {
-            results = data.data.map(item => ({
-                id: item.id,
-                title: item.name || item.title,
-                poster: item.poster || item.image,
-                year: item.year || '',
-                country: item.country || '',
-                type: item.type || '',
-                totalEpisodes: item.totalEpisodes || item.episodes || 0
-            }));
-        } else if (Array.isArray(data)) {
-            results = data.map(item => ({
-                id: item.id,
-                title: item.name || item.title,
-                poster: item.poster || item.image,
-                year: item.year || '',
-                country: item.country || ''
-            }));
-        } else if (data.results && Array.isArray(data.results)) {
-            results = data.results;
-        } else if (data.items && Array.isArray(data.items)) {
-            results = data.items;
+        // Add extra headers
+        await page.setExtraHTTPHeaders({
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Sec-Ch-Ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+            'Sec-Ch-Ua-Mobile': '?0',
+            'Sec-Ch-Ua-Platform': '"Windows"'
+        });
+
+        // Go to search page
+        const searchUrl = `${KISSKH_BASE}/search?keyword=${encodeURIComponent(q)}&type=${type}`;
+        console.log(`📄 Loading: ${searchUrl}`);
+        
+        await page.goto(searchUrl, { 
+            waitUntil: 'networkidle2', 
+            timeout: 90000 
+        });
+        
+        // Wait for page to fully load
+        await delay(5000);
+        
+        // Check if Cloudflare challenge is present
+        const pageTitle = await page.title();
+        if (pageTitle.includes('Just a moment')) {
+            console.log("⚠️ Cloudflare challenge detected, waiting...");
+            await delay(15000);
         }
         
-        // If still no results, try to extract from the data object
-        if (results.length === 0 && data) {
-            console.log("⚠️ Trying alternative parsing...");
-            for (const key in data) {
-                if (Array.isArray(data[key]) && data[key].length > 0) {
-                    results = data[key];
-                    break;
+        // Wait for content to appear
+        await page.waitForFunction(() => {
+            return document.body.innerText.length > 500;
+        }, { timeout: 30000 }).catch(() => console.log("Timeout waiting for content"));
+        
+        // Scroll to load lazy content
+        await page.evaluate(async () => {
+            for (let i = 0; i < 10; i++) {
+                window.scrollTo(0, document.body.scrollHeight);
+                await new Promise(r => setTimeout(r, 500));
+            }
+        });
+        
+        await delay(3000);
+        
+        // Extract results from the rendered page
+        const results = await page.evaluate(() => {
+            const items = [];
+            
+            // Look for any links that point to drama pages
+            const allLinks = document.querySelectorAll('a[href*="/drama/"], a[href*="/movie/"], a[href*="/anime/"]');
+            
+            allLinks.forEach(link => {
+                const href = link.href;
+                // Find the closest parent that might contain the title and image
+                let parent = link.parentElement;
+                for (let i = 0; i < 5; i++) {
+                    if (parent && (parent.classList.contains('movie-item') || parent.classList.contains('item') || parent.classList.contains('mb'))) {
+                        break;
+                    }
+                    parent = parent?.parentElement;
+                }
+                
+                // Get title
+                let title = link.querySelector('img')?.alt || 
+                           link.querySelector('.title')?.innerText?.trim() ||
+                           link.innerText?.trim();
+                
+                // Get image
+                let image = '';
+                const img = parent?.querySelector('img');
+                if (img) {
+                    image = img.src || img.getAttribute('data-src') || '';
+                    if (image && (image.includes('loading') || image.startsWith('data:'))) {
+                        image = img.getAttribute('data-src') || '';
+                    }
+                }
+                
+                if (title && title.length > 2 && title.length < 200 && href) {
+                    items.push({
+                        title: title,
+                        url: href,
+                        image: image || null
+                    });
+                }
+            });
+            
+            // Remove duplicates
+            const unique = [];
+            const seen = new Set();
+            for (const item of items) {
+                if (!seen.has(item.url)) {
+                    seen.add(item.url);
+                    unique.push(item);
                 }
             }
-        }
+            
+            return unique;
+        });
         
         console.log(`✅ Found ${results.length} results for "${q}"`);
+        
+        // If no results, get page HTML for debugging
+        if (results.length === 0) {
+            const html = await page.content();
+            console.log(`📄 Page HTML length: ${html.length}`);
+            const bodyText = await page.evaluate(() => document.body.innerText.substring(0, 500));
+            console.log(`📝 Body text preview: ${bodyText}`);
+        }
         
         res.json({
             success: true,
@@ -114,11 +186,9 @@ app.get('/api/kisskh/search', async (req, res) => {
         
     } catch (error) {
         console.error("Kisskh Search Error:", error.message);
-        if (error.response) {
-            console.error("Status:", error.response.status);
-            console.error("Data:", error.response.data);
-        }
         res.status(500).json({ success: false, error: error.message });
+    } finally {
+        if (browser) await browser.close();
     }
 });
 
