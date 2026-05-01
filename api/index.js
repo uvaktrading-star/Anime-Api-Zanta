@@ -717,7 +717,7 @@ async function getCartoonDownload(inputUrl) {
 app.get('/api/weta/dl', async (req, res) => {
     const url = req.query.url;
     if (!url) return res.json({ success: false, error: "Wetafiles URL is required" });
-    const result = await getWetafilesDirectLink(url);
+    const result = await getUniversalDirectLink(url);
     res.json(result);
 });
 
