@@ -38,20 +38,13 @@ async function getUniversalDirectLink(targetUrl) {
     let browser;
     try {
         console.log("🚀 Launching Multi-Site Sniper...");
-        
-        // සයිට් එක හඳුනා ගැනීම
         const isWella = targetUrl.includes('downloadwella.com');
         const siteDomain = isWella ? 'downloadwella.com' : 'wetafiles.com';
 
         browser = await puppeteer.launch({
             executablePath: HEROKU_CHROME_PATH,
             headless: true,
-            args: [
-                '--no-sandbox', 
-                '--disable-setuid-sandbox', 
-                '--disable-dev-shm-usage',
-                '--ignore-certificate-errors'
-            ]
+            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--ignore-certificate-errors']
         });
 
         const page = await browser.newPage();
@@ -59,12 +52,13 @@ async function getUniversalDirectLink(targetUrl) {
 
         let capturedUrl = null;
 
-        // 🎯 Request Sniffer
+        // 🎯 Sniffer එකට filter එකක් දැමීම (Analytics ලින්ක් මඟහැරීමට)
         page.on('request', request => {
             const url = request.url();
-            // downloadwella වල ලින්ක් 'dwbe' හෝ 'dl' ලෙස ආරම්භ විය හැක
-            if ((url.includes('dl') || url.includes('dwbe')) && 
-                (url.includes('.mp4') || url.includes('.mkv') || url.includes('.zip') || url.includes('.rar'))) {
+            // Google analytics හෝ වෙනත් trackers මඟහැර සැබෑ ලින්ක් එක පමණක් අල්ලා ගැනීම
+            if ((url.includes('dwbe') || url.includes('/dl/')) && 
+                !url.includes('google-analytics') && 
+                (url.includes('.mp4') || url.includes('.mkv') || url.includes('.zip'))) {
                 capturedUrl = url;
             }
         });
@@ -81,45 +75,42 @@ async function getUniversalDirectLink(targetUrl) {
         console.log(`Step 1: Loading ${siteDomain} Page...`);
         await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 45000 });
 
-        // දෙකටම පොදු බටන් selector එක (ඔබේ screenshot එකේ පෙනෙන පරිදි #downloadbtn භාවිතා වේ)
-        const btnSelector = '#downloadbtn'; 
-        await page.waitForSelector(btnSelector, { timeout: 15000 });
-
+        // 👆 පළමු බටන් එක ක්ලික් කිරීම (Create Download Link)
+        const firstBtn = '#downloadbtn';
+        await page.waitForSelector(firstBtn, { timeout: 15000 });
         console.log("Step 2: Clicking 'Create download link'...");
-        for (let i = 0; i < 3; i++) {
-            if (capturedUrl) break;
-            await page.evaluate((sel) => {
-                const btn = document.querySelector(sel);
-                if (btn) btn.click();
-            }, btnSelector);
-            await delay(3000); 
-        }
+        await page.click(firstBtn);
+        await delay(5000); // ඩවුන්ලෝඩ් ලින්ක් එක ජෙනරේට් වන තෙක් රැඳී සිටීම
 
-        // 3. HTML එකෙන් සෘජුවම ලින්ක් එක සෙවීම
+        // ✌️ දෙවන බටන් එක ක්ලික් කිරීම (Start Download)
+        // Screenshot එකේ (image_73a584.png) පෙනෙන පරිදි "Start download" සඳහාත් එම ID එකම හෝ ආසන්න එකක් භාවිතා වේ.
+        console.log("Step 3: Clicking 'Start download' to trigger direct link...");
+        
+        const secondBtnFound = await page.evaluate(() => {
+            const btn = document.querySelector('#downloadbtn') || document.querySelector('a.downloadbtn') || document.querySelector('#direct_link a');
+            if (btn) {
+                btn.click();
+                return true;
+            }
+            return false;
+        });
+
+        // ලින්ක් එක ලැබෙන තෙක් තවත් සුළු වෙලාවක් රැඳී සිටීම
+        await delay(3000);
+
+        // අවසාන වශයෙන් රික්වෙස්ට් එක අල්ලා ගැනීමට නොහැකි වුණොත් HTML එකෙන් බැලීම
         if (!capturedUrl) {
-            console.log("Step 3: Extracting link from HTML components...");
-            capturedUrl = await page.evaluate((isWella) => {
-                // Downloadwella වල Start Download බටන් එකේ <a> ටැග් එක කෙලින්ම ගනී
-                if (isWella) {
-                    const wellaLink = document.querySelector('a[href*="dwbe"]');
-                    return wellaLink ? wellaLink.href : null;
-                }
-                // Wetafiles සඳහා ඔබේ පැරණි selector එක
-                const wetaLink = document.querySelector('#direct_link a');
-                return wetaLink ? wetaLink.href : null;
-            }, isWella);
+            capturedUrl = await page.evaluate(() => {
+                const link = document.querySelector('a[href*="dwbe"]') || document.querySelector('#direct_link a');
+                return link ? link.href : null;
+            });
         }
 
         if (capturedUrl) {
-            console.log("🎯 Success! Link Captured:", capturedUrl);
-            return { 
-                success: true, 
-                creator: "ZANTA-MD",
-                site: siteDomain,
-                download_url: capturedUrl 
-            };
+            console.log("🎯 Success! Real Link Captured:", capturedUrl);
+            return { success: true, creator: "ZANTA-MD", download_url: capturedUrl };
         } else {
-            throw new Error("Could not capture direct link. Timeout.");
+            throw new Error("Could not capture real direct link.");
         }
 
     } catch (e) {
