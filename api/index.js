@@ -34,6 +34,89 @@ function delay(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+async function getWetafilesDirectLink(wetaUrl) {
+    let browser;
+    try {
+        console.log("🚀 Launching Wetafiles Sniper...");
+        browser = await puppeteer.launch({
+            executablePath: HEROKU_CHROME_PATH,
+            headless: true,
+            args: [
+                '--no-sandbox', 
+                '--disable-setuid-sandbox', 
+                '--disable-dev-shm-usage',
+                '--ignore-certificate-errors' // SSL Error එක මඟහැරීමට
+            ]
+        });
+
+        const page = await browser.newPage();
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36');
+
+        let capturedUrl = null;
+
+        // 🎯 Request Sniffer - ලින්ක් එකක් හරහා download එකක් යද්දිම අල්ලගන්න
+        page.on('request', request => {
+            const url = request.url();
+            // මෙතනදී wetafiles වල ඩිරෙක්ට් ෆයිල් ලින්ක් එකේ තියෙන පොදු ලක්ෂණයක් අනුව filter කළ හැක
+            if (url.includes('dl') && (url.includes('.mp4') || url.includes('.mkv') || url.includes('.zip'))) {
+                capturedUrl = url;
+            }
+        });
+
+        // 🛡️ AD-TAB CLOSER - අනවශ්‍ය ඇඩ්ස් ටැබ් වැසීමට
+        browser.on('targetcreated', async (target) => {
+            const adPage = await target.page();
+            if (adPage && !adPage.url().includes('wetafiles.com')) {
+                await adPage.close().catch(() => {});
+                await page.bringToFront();
+            }
+        });
+
+        console.log("Step 1: Loading Wetafiles Page...");
+        await page.goto(wetaUrl, { waitUntil: 'networkidle2', timeout: 45000 });
+
+        const btnSelector = '#downloadbtn'; // Create Download Link බටන් එක
+        await page.waitForSelector(btnSelector, { timeout: 15000 });
+
+        console.log("Step 2: Clicking 'Create Download Link'...");
+        // බටන් එක ක්ලික් කිරීම (ඇඩ්ස් එන නිසා කිහිප පාරක් උත්සාහ කරයි)
+        for (let i = 0; i < 3; i++) {
+            if (capturedUrl) break;
+            await page.evaluate((sel) => {
+                const btn = document.querySelector(sel);
+                if (btn) btn.click();
+            }, btnSelector);
+            await delay(3000); // ලින්ක් එක ජෙනරේට් වෙන්න වෙලාව දීම
+        }
+
+        // 3. Evaluate කර ලින්ක් එක සෘජුවම HTML එකෙන් ලබා ගැනීම (Request Sniffer එකට අහු නොවූවොත්)
+        if (!capturedUrl) {
+            console.log("Step 3: Extracting link from HTML components...");
+            capturedUrl = await page.evaluate(() => {
+                const linkTag = document.querySelector('#direct_link a');
+                return linkTag ? linkTag.href : null;
+            });
+        }
+
+        if (capturedUrl) {
+            console.log("🎯 Success! Weta Link Captured:", capturedUrl);
+            return { 
+                success: true, 
+                creator: "ZANTA-MD",
+                download_url: capturedUrl 
+            };
+        } else {
+            throw new Error("Could not capture direct link. Timeout.");
+        }
+
+    } catch (e) {
+        console.error("Weta Sniper Error:", e.message);
+        return { success: false, error: e.message };
+    } finally {
+        if (browser) await browser.close();
+    }
+}
+
 
 //-------CINESUBZ---------
 async function getCinesubzAxiosHTML(targetUrl) {
@@ -618,6 +701,13 @@ async function getCartoonDownload(inputUrl) {
         if (browser) await browser.close();
     }
 }
+
+app.get('/api/weta/dl', async (req, res) => {
+    const url = req.query.url;
+    if (!url) return res.json({ success: false, error: "Wetafiles URL is required" });
+    const result = await getWetafilesDirectLink(url);
+    res.json(result);
+});
 
 // Search: http://localhost:5000/api/cartoons/search?q=harry+potter
 app.get('/api/cartoons/search', async (req, res) => {
